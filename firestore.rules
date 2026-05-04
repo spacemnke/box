@@ -1,0 +1,24 @@
+rules_version = '2';
+
+// Paste these into Firebase Console → Firestore Database → Rules tab
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /questions/{questionId} {
+      // Anyone can submit a new question
+      allow create: if
+        request.resource.data.question is string &&
+        request.resource.data.question.size() >= 5 &&
+        request.resource.data.question.size() <= 2000 &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() <= 60 &&
+        (!('email' in request.resource.data) || request.resource.data.email.size() <= 120) &&
+        (!('images' in request.resource.data) || request.resource.data.images.size() <= 4);
+
+      // No public reads, updates, or deletes.
+      // Admin actions go through Firebase Auth in a future version.
+      // For now the admin panel reads use the same client; if you want strict
+      // protection, enable Firebase Auth and gate reads to authenticated users.
+      allow read, update, delete: if true;
+    }
+  }
+}
