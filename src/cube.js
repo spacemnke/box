@@ -309,8 +309,10 @@ export function createContactShadow() {
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d');
   const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0, 'rgba(0,0,0,0.55)');
-  grad.addColorStop(0.45, 'rgba(0,0,0,0.28)');
+  // On a black ground a dark shadow does nothing; a faint pool of spill light
+  // is what actually seats the cube on a surface.
+  grad.addColorStop(0, 'rgba(150,170,190,0.20)');
+  grad.addColorStop(0.35, 'rgba(120,140,165,0.08)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
@@ -319,7 +321,12 @@ export function createContactShadow() {
   tex.colorSpace = THREE.SRGBColorSpace;
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(CUBE_SIZE * 3.2, CUBE_SIZE * 3.2),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
   );
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = -HALF * 1.06;

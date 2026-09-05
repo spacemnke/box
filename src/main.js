@@ -1,14 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import {
-  geocode,
-  reverseGeocode,
-  fetchWeather,
-  fetchOSM,
-  hourlyAt,
-  localStamp,
-} from './data.js';
+import { geocode, reverseGeocode, fetchWeather, fetchOSM, hourlyAt, localStamp } from './data.js';
 import { buildClimate } from './climate.js';
 import {
   HALF,
@@ -19,6 +12,7 @@ import {
   createContactShadow,
   createNorthMarker,
 } from './cube.js';
+import { AtmosphereSlab, GroundSlab, GROUND_TOP, SKY_BOTTOM } from './slabs.js';
 import { WeatherFX } from './weatherfx.js';
 import { ModelCity } from './modelcity.js';
 import { loadStreetViewCube } from './panorama.js';
@@ -36,48 +30,60 @@ const HEIGHT_EXAGGERATION = 2.0;
 const el = (id) => document.getElementById(id);
 const dom = {
   canvas: el('stage'),
-  form: el('search-form'),
-  address: el('address'),
-  btnSearch: el('btn-search'),
-  btnLocate: el('btn-locate'),
-  results: el('results'),
-  place: el('place'),
-  placeName: el('place-name'),
-  placeCoords: el('place-coords'),
-  segPhoto: el('seg-photo'),
-  segModel: el('seg-model'),
-  modeHint: el('mode-hint'),
-  keyToggle: el('key-toggle'),
-  keyBody: el('key-body'),
-  apiKey: el('api-key'),
-  rememberKey: el('remember-key'),
-  status: el('status'),
+  // headline
+  ledeCondition: el('lede-condition'),
+  ledePlace: el('lede-place'),
+  ledeSub: el('lede-sub'),
+  btnChange: el('btn-change'),
+  // readout
+  condLabel: el('wx-cond-label'),
+  dialArc: el('dial-arc'),
   wxTemp: el('wx-temp'),
-  wxCond: el('wx-cond'),
-  wxSub: el('wx-sub'),
   wxFeels: el('wx-feels'),
   wxWind: el('wx-wind'),
   wxCloud: el('wx-cloud'),
   wxHum: el('wx-hum'),
   wxPrecip: el('wx-precip'),
   wxVis: el('wx-vis'),
-  wxSun: el('wx-sun'),
-  wxTime: el('wx-time'),
   timeSlider: el('time-slider'),
   timeCaption: el('time-caption'),
   btnNow: el('btn-now'),
+  // strip
+  wxTime: el('wx-time'),
+  wxSun: el('wx-sun'),
+  wxGust: el('wx-gust'),
+  wxPress: el('wx-press'),
+  creditStatus: el('credit-status'),
+  svCredit: el('sv-credit'),
+  // drawer
+  btnPanel: el('btn-panel'),
+  btnClose: el('btn-close'),
+  drawer: el('drawer'),
+  form: el('search-form'),
+  address: el('address'),
+  btnSearch: el('btn-search'),
+  btnLocate: el('btn-locate'),
+  results: el('results'),
+  placeCoords: el('place-coords'),
+  segPhoto: el('seg-photo'),
+  segModel: el('seg-model'),
+  modeHint: el('mode-hint'),
   override: el('override'),
+  keyToggle: el('key-toggle'),
+  keyBody: el('key-body'),
+  apiKey: el('api-key'),
+  rememberKey: el('remember-key'),
   optRotate: el('opt-rotate'),
   optGlass: el('opt-glass'),
   optSkyReplace: el('opt-sky-replace'),
   optQuality: el('opt-quality'),
   btnShot: el('btn-shot'),
   btnShare: el('btn-share'),
-  uiToggle: el('ui-toggle'),
+  status: el('status'),
+  // loader
   loader: el('loader'),
   loaderText: el('loader-text'),
   loaderBar: el('loader-bar'),
-  svCredit: el('sv-credit'),
 };
 
 /* ------------------------------------------------------------------ */
@@ -85,7 +91,7 @@ const dom = {
 /* ------------------------------------------------------------------ */
 
 const state = {
-  place: null, // { label, lat, lon }
+  place: null,
   weather: null,
   panoMeta: null,
   mode: 'model',
@@ -119,17 +125,19 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 100);
-camera.position.set(3.1, 1.9, 3.6);
+// A long lens and a high three-quarter view: the cube reads as an object on a
+// table rather than a room you are standing in.
+const camera = new THREE.PerspectiveCamera(29, 1, 0.05, 100);
+camera.position.set(4.05, 3.15, 4.65);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.minDistance = 0.35;
-controls.maxDistance = 11;
+controls.maxDistance = 12;
 controls.autoRotate = true;
-controls.autoRotateSpeed = 0.35;
-controls.target.set(0, 0, 0);
+controls.autoRotateSpeed = 0.28;
+controls.target.set(0, -0.02, 0);
 
 const shared = createSharedUniforms();
 
@@ -138,6 +146,13 @@ scene.add(cubeGroup);
 
 const shell = new CubeShell(shared);
 cubeGroup.add(shell.group);
+
+const sky = new AtmosphereSlab(shared);
+cubeGroup.add(sky.group);
+
+const groundSlab = new GroundSlab(shared);
+groundSlab.setScale(MODEL_RADIUS_M / HEIGHT_EXAGGERATION);
+cubeGroup.add(groundSlab.group);
 
 const city = new ModelCity(shared);
 cubeGroup.add(city.group);
@@ -205,6 +220,7 @@ function frame() {
 
   const flash = fx.update(dt, t);
   shared.uFlash.value = flash;
+  sky.update(t);
 
   if (state.climate) {
     // Lightning briefly overrides the sun for the model geometry too.
@@ -243,13 +259,17 @@ function applyClimate(climate) {
   shell.applyClimate(climate);
   fx.applyClimate(climate, state.quality);
   city.applyClimate(climate);
+  sky.applyClimate(climate);
+  groundSlab.applyClimate(climate);
+  // The lid moves with the cloud cover, so the weather's headroom moves too.
+  fx.setBand(GROUND_TOP, sky.bottomY);
 
   // Light rig
   const d = climate.sunDir;
   const usingMoon = d.y < -0.05;
   const dir = usingMoon ? climate.moonDir : d;
   sunLight.position.set(dir.x, Math.max(dir.y, 0.08), dir.z).multiplyScalar(6);
-  sunLight.target.position.set(0, -HALF, 0);
+  sunLight.target.position.set(0, GROUND_TOP, 0);
   sunLight.color.copy(usingMoon ? new THREE.Color(0x9fb4ff) : climate.sunColor);
   sunLight.intensity = usingMoon ? 0.14 : climate.sunIntensity;
   sunLight.castShadow = !usingMoon && climate.sunIntensity > 0.25 && state.mode === 'model';
@@ -263,10 +283,10 @@ function applyClimate(climate) {
   skyLight.intensity = climate.ambientIntensity;
   bounce.intensity = 0.05 + climate.ambientIntensity * 0.15;
 
-  // Scene fog, for the extruded model only. Density is per world unit, and
-  // one world unit is MODEL_RADIUS_M metres of real street.
-  // 0.8 is a legibility fudge: true Koschmieder extinction hides the model
-  // entirely in dense fog, and a diorama you cannot see into is not one.
+  // Scene fog, for the extruded model only. Density is per world unit, and one
+  // world unit is MODEL_RADIUS_M metres of real street. 0.8 is a legibility
+  // fudge: true Koschmieder extinction hides the model entirely in dense fog,
+  // and a diorama you cannot see into is not one.
   const density = climate.fogPerMetre * MODEL_RADIUS_M * 0.8;
   scene.fog = density > 0.01 ? new THREE.FogExp2(climate.fogColor.getHex(), density) : null;
 
@@ -313,6 +333,7 @@ function effectiveReading() {
       windDirection: h.windDirection,
       windGust: h.windGust,
       isDay: h.isDay,
+      pressure: w.current.pressure,
     };
   }
 
@@ -337,53 +358,82 @@ function refreshClimate() {
 /* Readout                                                             */
 /* ------------------------------------------------------------------ */
 
-const fmt = (v, digits = 0, suffix = '') =>
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const compass = (deg) => COMPASS[Math.round(((((deg % 360) + 360) % 360) / 22.5)) % 16];
+const num = (v, digits = 0, suffix = '') =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : `${v.toFixed(digits)}${suffix}`;
 
-const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-const compass = (deg) => COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+/** Short name for the headline: the street or the town, not the whole address. */
+function shortPlace(label) {
+  if (!label) return '';
+  const parts = label.split(',').map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return label;
+  // A house number on its own says nothing; pair it with the street.
+  if (/^\d+[a-z]?$/i.test(parts[0]) && parts[1]) return `${parts[1]} ${parts[0]}`;
+  return parts[0];
+}
+
+const DIAL_CIRCUMFERENCE = 2 * Math.PI * 52;
 
 function updateReadout(climate) {
   const r = climate.reading;
   const w = state.weather;
-
-  dom.wxTemp.textContent = r.temperature === undefined ? '—' : Math.round(r.temperature);
-  dom.wxCond.textContent = climate.conditionText;
-
   const simulated = state.override !== 'live';
-  dom.wxSub.textContent = simulated
-    ? 'Simulated sky — not the live forecast'
-    : state.timeOffsetHours === 0
-      ? `Live · ${w?.source || ''}`
-      : 'Forecast hour';
 
-  dom.wxFeels.textContent = fmt(r.apparentTemperature ?? r.temperature, 0, '°');
+  // ---- headline ----------------------------------------------------------
+  dom.ledeCondition.textContent = `${climate.conditionText}.`;
+  dom.ledePlace.textContent = state.place ? `${shortPlace(state.place.label)}.` : '';
+  dom.condLabel.textContent = climate.conditionText;
+
+  const bits = [];
+  if (r.temperature !== undefined) bits.push(`${Math.round(r.temperature)}°`);
+  if (w) bits.push(`${localStamp(currentInstant(), w.utcOffsetSeconds || 0).slice(11)} local`);
+  bits.push(
+    simulated
+      ? 'simulated sky'
+      : state.timeOffsetHours === 0
+        ? 'live'
+        : `${state.timeOffsetHours > 0 ? '+' : ''}${state.timeOffsetHours} h forecast`
+  );
+  dom.ledeSub.textContent = bits.join(' · ');
+
+  // ---- dial --------------------------------------------------------------
+  dom.wxTemp.textContent = r.temperature === undefined ? '—' : Math.round(r.temperature);
+  dom.wxFeels.textContent =
+    r.apparentTemperature === undefined ? '' : `feels ${Math.round(r.apparentTemperature)}°`;
+  // The arc reads -15 °C to +45 °C over three quarters of the circle.
+  const frac = THREE.MathUtils.clamp(((r.temperature ?? 0) + 15) / 60, 0, 1);
+  dom.dialArc.style.strokeDashoffset = String(DIAL_CIRCUMFERENCE * (1 - frac * 0.75));
+
+  // ---- rows --------------------------------------------------------------
   dom.wxWind.textContent =
-    r.windSpeed === undefined
-      ? '—'
-      : `${r.windSpeed.toFixed(1)} m/s ${compass(r.windDirection ?? 0)}`;
-  dom.wxCloud.textContent = fmt(r.cloudCover, 0, '%');
-  dom.wxHum.textContent = fmt(r.humidity, 0, '%');
+    r.windSpeed === undefined ? '—' : `${r.windSpeed.toFixed(1)} m/s ${compass(r.windDirection ?? 0)}`;
+  dom.wxCloud.textContent = num(r.cloudCover, 0, '%');
+  dom.wxHum.textContent = num(r.humidity, 0, '%');
   dom.wxPrecip.textContent =
-    (r.snowfall ?? 0) > 0 ? `${r.snowfall.toFixed(1)} cm snow` : `${(r.precipitation ?? 0).toFixed(1)} mm`;
+    (r.snowfall ?? 0) > 0 ? `${r.snowfall.toFixed(1)} cm` : `${(r.precipitation ?? 0).toFixed(1)} mm`;
   dom.wxVis.textContent =
     climate.visibility >= 10000
       ? `${(climate.visibility / 1000).toFixed(0)} km`
       : `${Math.round(climate.visibility)} m`;
-  dom.wxSun.textContent = `${climate.sunAltitudeDeg > 0 ? '↑' : '↓'} ${climate.sunAltitudeDeg.toFixed(0)}°`;
+
+  // ---- strip -------------------------------------------------------------
+  dom.wxSun.textContent = `${climate.sunAltitudeDeg > 0 ? '↑' : '↓'}${climate.sunAltitudeDeg.toFixed(0)}°`;
+  dom.wxGust.textContent = num(r.windGust, 0, '');
+  dom.wxPress.textContent = num(r.pressure ?? w?.current?.pressure, 0, '');
 
   if (w) {
     const stamp = localStamp(currentInstant(), w.utcOffsetSeconds || 0);
     dom.wxTime.textContent = stamp.slice(11);
     dom.timeCaption.textContent =
       state.timeOffsetHours === 0
-        ? `Live conditions · ${stamp.slice(11)} local`
-        : `${state.timeOffsetHours > 0 ? '+' : ''}${state.timeOffsetHours} h · ${stamp.replace('T', ' ')} local`;
+        ? 'Live conditions'
+        : `${state.timeOffsetHours > 0 ? '+' : ''}${state.timeOffsetHours} h · ${stamp.replace('T', ' ')}`;
   }
 }
 
 /* ------------------------------------------------------------------ */
-/* Loading UI                                                          */
+/* Chrome                                                              */
 /* ------------------------------------------------------------------ */
 
 function showLoader(text, progress = 0) {
@@ -396,7 +446,12 @@ function hideLoader() {
 }
 function setStatus(text, kind = '') {
   dom.status.textContent = text;
-  dom.status.className = `status ${kind}`;
+  dom.status.className = `note ${kind}`;
+  dom.creditStatus.textContent = text;
+}
+function openDrawer(open = true) {
+  dom.drawer.hidden = !open;
+  dom.btnPanel.setAttribute('aria-expanded', String(open));
 }
 
 /* ------------------------------------------------------------------ */
@@ -410,14 +465,12 @@ async function buildForPlace(place, { preferMode } = {}) {
   shell.clearTextures();
 
   state.place = place;
-  dom.place.hidden = false;
-  dom.placeName.textContent = place.label;
-  dom.placeCoords.textContent = `${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
+  dom.placeCoords.textContent = `${place.label} · ${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
+  dom.ledePlace.textContent = `${shortPlace(place.label)}.`;
   dom.results.hidden = true;
 
-  // Weather first: it is fast, and it lets the cube light up immediately.
   try {
-    showLoader('Reading the sky…', 0.15);
+    showLoader('Reading the sky', 0.15);
     state.weather = await fetchWeather(place.lat, place.lon);
     state.lastWeatherFetch = Date.now();
     refreshClimate();
@@ -431,12 +484,11 @@ async function buildForPlace(place, { preferMode } = {}) {
   // Always build the block model: it is the fallback, and it is what shows
   // through if Street View has no coverage.
   try {
-    showLoader('Fetching building footprints…', 0.45);
+    showLoader('Cutting the ground', 0.45);
     const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M);
     const stats = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
     setStatus(
-      `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, ` +
-        `heights exaggerated ${HEIGHT_EXAGGERATION}x.`,
+      `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`,
       'ok'
     );
   } catch (err) {
@@ -467,7 +519,7 @@ async function loadPhotos(place, key) {
       radius: 80,
       headingOffset: state.headingOffset,
       onProgress: ({ done, total, stage }) => {
-        showLoader(`Street View: ${stage}…`, 0.5 + (done / total) * 0.5);
+        showLoader(`Street View · ${stage}`, 0.5 + (done / total) * 0.5);
       },
     });
     state.panoMeta = meta;
@@ -477,7 +529,7 @@ async function loadPhotos(place, key) {
 
     const dist = haversine(place.lat, place.lon, meta.lat, meta.lon);
     setStatus(
-      `Street View panorama from ${meta.date || 'unknown date'}, ${dist.toFixed(0)} m from the address.`,
+      `Street View panorama from ${meta.date || 'an unknown date'}, ${dist.toFixed(0)} m from the address`,
       'ok'
     );
     dom.svCredit.textContent = meta.copyright || 'Google Street View';
@@ -508,6 +560,9 @@ function setMode(mode) {
 
   shell.setMode(mode);
   city.group.visible = mode === 'model';
+  // A photographed street already contains its own ground; the cut slab is
+  // only right under the extruded model.
+  groundSlab.group.visible = mode === 'model';
 
   dom.segPhoto.classList.toggle('is-active', mode === 'photo');
   dom.segModel.classList.toggle('is-active', mode === 'model');
@@ -516,15 +571,14 @@ function setMode(mode) {
 
   dom.modeHint.textContent =
     mode === 'photo'
-      ? 'Four Street View walls and the road surface, relit for the current weather. The sky above them is simulated.'
+      ? 'Four Street View walls and the road surface, relit for the current weather, capped by simulated cloud.'
       : 'The block model is extruded from OpenStreetMap footprints and needs no key.';
 
-  // Inside the photo box you want to be near the middle; the model reads
-  // better from outside.
   controls.minDistance = mode === 'photo' ? 0.05 : 0.35;
 }
 
 function openKeyPanel() {
+  openDrawer(true);
   dom.keyBody.hidden = false;
   dom.keyToggle.setAttribute('aria-expanded', 'true');
   dom.apiKey.focus();
@@ -541,8 +595,8 @@ function writeURL() {
   p.set('lat', state.place.lat.toFixed(6));
   p.set('lon', state.place.lon.toFixed(6));
   p.set('mode', state.mode);
-  if (state.headingOffset) p.set('heading', String(state.headingOffset));
   if (state.override !== 'live') p.set('sky', state.override);
+  if (state.headingOffset) p.set('heading', String(state.headingOffset));
   history.replaceState(null, '', `?${p}`);
 }
 
@@ -550,14 +604,22 @@ function writeURL() {
 /* Events                                                              */
 /* ------------------------------------------------------------------ */
 
+dom.btnPanel.addEventListener('click', () => openDrawer(dom.drawer.hidden));
+dom.btnClose.addEventListener('click', () => openDrawer(false));
+dom.btnChange.addEventListener('click', () => {
+  openDrawer(true);
+  dom.address.focus();
+  dom.address.select();
+});
+
 dom.form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const q = dom.address.value.trim();
   if (!q) return;
   dom.btnSearch.disabled = true;
-  setStatus('Looking up the address…');
+  setStatus('Looking up the address');
   try {
-    showLoader('Finding the address…', 0.05);
+    showLoader('Finding the address', 0.05);
     const hits = await geocode(q);
     hideLoader();
     if (!hits.length) {
@@ -594,7 +656,7 @@ dom.btnLocate.addEventListener('click', () => {
     setStatus('This browser will not share a location.', 'error');
     return;
   }
-  setStatus('Asking the browser where you are…');
+  setStatus('Asking the browser where you are');
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       const { latitude: lat, longitude: lon } = pos.coords;
@@ -619,7 +681,7 @@ dom.segPhoto.addEventListener('click', async () => {
     return openKeyPanel();
   }
   if (state.photoReady) return setMode('photo');
-  showLoader('Street View…', 0.5);
+  showLoader('Street View', 0.5);
   await loadPhotos(state.place, key);
   hideLoader();
   refreshClimate();
@@ -696,13 +758,10 @@ dom.btnShare.addEventListener('click', async () => {
   }
 });
 
-dom.uiToggle.addEventListener('click', () => {
-  document.body.classList.toggle('ui-hidden');
-});
-
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (e.key === 'h') document.body.classList.toggle('ui-hidden');
+  if (e.key === 'Escape') openDrawer(false);
+  if (e.key === 'c') openDrawer(dom.drawer.hidden);
   if (e.key === 'r') dom.optRotate.click();
 });
 
@@ -762,5 +821,10 @@ setInterval(async () => {
   }
 })();
 
-/* Expose a little of the app for debugging and for the smoke test. */
-window.__cube = { state, scene, camera, controls, renderer, shell, city, fx, glass, applyClimate, buildClimate, setMode };
+/* Exposed for debugging and for the smoke test. */
+window.__cube = {
+  state, scene, camera, controls, renderer,
+  shell, city, fx, glass, sky, groundSlab,
+  applyClimate, buildClimate, setMode,
+  layout: { GROUND_TOP, SKY_BOTTOM },
+};

@@ -1,9 +1,26 @@
 # Weather Cube
 
-Type an address, get a glass cube containing that place — its buildings, its
-street layout, its sky — under the weather that is happening there right now.
+Type an address and get a cross-section of that place: a cube cut out of the
+world, with the ground it stands on below, its buildings in the middle, and the
+weather actually happening over it right now on top.
 
 <img src="docs/preview-night-rain.png" alt="The cube at night in the rain" width="720">
+
+## The cube is a cut, not a box
+
+Three layers, stacked and sectioned so you can see into all of them at once:
+
+- **A lid of atmosphere.** Bright and thin on a clear day, a thick bruised
+  ceiling under a storm. Its cut face shows the cloud deck in profile, lit from
+  above and shadowed underneath, with billows hanging below the base.
+- **A band of open air**, where the rain, snow, fog and lightning happen. It
+  darkens as the deck above it thickens, which is what makes falling rain read
+  as bright.
+- **A block of ground**, cut through: made ground, soil, gravel, clay and rock
+  by real depth, with a lit lip at street level that turns sodium-warm once the
+  lamps come on.
+
+The buildings stand on top of the ground block, in the air.
 
 The cube can be filled two ways:
 
@@ -45,8 +62,8 @@ and no CDN.
    press **Street View**.
 
 Controls: drag to orbit, scroll to zoom — zoom right in and you are standing
-inside the cube. `h` hides the panels, `r` toggles auto-rotate. **Save PNG**
-writes out the current frame.
+inside the cube. `c` opens and closes the controls drawer, `r` toggles
+auto-rotate, `Esc` closes the drawer. **Save PNG** writes out the current frame.
 
 The **Hour** slider walks ±24 hours through the real hourly forecast, so you
 can watch your street move from this morning's fog into tonight's clear sky.
@@ -97,10 +114,18 @@ shadows in the model fall the right way. Twilight is treated as the long,
 bright thing it is: the street stays readable to about 6° below the horizon
 and is only properly dark by 16°.
 
-**Sky** (`src/glsl.js`) is one GLSL function shared by the skybox, the glass
-shell's reflections and the Street View walls. Cloud cover remaps a two-layer
-fBm deck between an empty sky and a solid ceiling; the deck drifts with the
-real wind vector. Stars are placed in cells on a sphere so they stay round.
+**Sky** (`src/glsl.js`) is one GLSL function shared by the interior walls, the
+glass shell's reflections and the Street View walls. Cloud cover remaps a
+two-layer fBm deck between an empty sky and a solid ceiling; the deck drifts
+with the real wind vector. Stars are placed in cells on a sphere so they stay
+round.
+
+**The layers** (`src/slabs.js`) are two shaded boxes. The lid's thickness and
+colour follow the cloud cover, from a thin luminous blue-white plate to a deep
+overcast ceiling, and the weather is re-fitted into whatever headroom is left
+below it. The interior walls are deliberately *not* open sky: they are the far
+air under that deck, so they darken as it thickens. Getting this wrong washes
+the middle of the cube out and the rain vanishes into it.
 
 **Fog** is the part most likely to be got wrong. Visibility is reported in
 metres, but the cube only spans about 150 m, so visibility is first converted
@@ -154,10 +179,17 @@ Serves the site, stubs every third-party call with fixtures, and renders a
 sweep of weather states to `shots/` — clear, overcast, rain, storm, snow, fog,
 night, dusk — plus one view of each Street View wall from inside the cube,
 which is how the panorama orientation is checked (facing north, east must be on
-the right). It fails on any console error.
+the right). It also regenerates the README preview. It fails on any console
+error.
 
 Fixtures are synthetic and are labelled as such; they are not real data for any
 real address.
+
+## Type
+
+The page uses whatever transitional serif the reader already has — Iowan Old
+Style, Palatino, Georgia — with no webfont request. It will look a little
+different on a machine that has none of them.
 
 ## Layout
 
@@ -170,6 +202,7 @@ src/
   climate.js        weather reading -> render parameters
   sun.js            solar and lunar position
   glsl.js           shared sky, and the Street View relighting shader
+  slabs.js          the cloud lid and the cut block of ground
   cube.js           the six interior panels, glass shell, frame
   modelcity.js      OpenStreetMap footprints -> extruded block
   weatherfx.js      rain, snow, drift, ground fog, lightning

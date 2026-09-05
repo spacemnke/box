@@ -119,8 +119,8 @@ await page.evaluate(() => {
   const { camera, controls } = window.__cube;
   document.getElementById('opt-rotate').checked = false;
   document.getElementById('opt-rotate').dispatchEvent(new Event('change'));
-  controls.target.set(0, 0, 0);
-  camera.position.set(3.0, 2.0, 3.5);
+  controls.target.set(0, -0.02, 0);
+  camera.position.set(4.05, 3.15, 4.65);
   controls.update();
 });
 
@@ -165,6 +165,7 @@ await page.evaluate((h) => {
   slider.value = String(h);
   slider.dispatchEvent(new Event('input'));
 }, DAY);
+await page.click('#btn-panel');
 await page.click('#seg-photo');
 await page.waitForFunction(() => window.__cube.state.photoReady === true, null, { timeout: 20000 });
 await page.waitForTimeout(600);
@@ -207,7 +208,10 @@ await page.screenshot({ path: path.join(outDir, 'sv-outside.png') });
 
 /* ---- README preview: the model cube at night in the rain, no chrome ---- */
 await page.evaluate(() => {
-  document.body.classList.add('ui-hidden');
+  document.getElementById('btn-close').click();
+  for (const sel of ['.topbar', '.lede', '.readout', '.strip', '.credits']) {
+    document.querySelector(sel).style.opacity = '0';
+  }
   document.getElementById('seg-model').click();
 });
 await page.evaluate((h) => {
@@ -218,17 +222,21 @@ await page.evaluate((h) => {
   sel.value = 'rain';
   sel.dispatchEvent(new Event('change'));
   const { camera, controls } = window.__cube;
-  controls.target.set(0, -0.05, 0);
-  camera.position.set(2.6, 1.75, 3.0);
+  controls.target.set(0, -0.02, 0);
+  camera.position.set(3.7, 2.85, 4.25);
   controls.update();
 }, NIGHT);
 await page.waitForTimeout(1200);
 fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
 await page.screenshot({
   path: path.join(root, 'docs', 'preview-night-rain.png'),
-  clip: { x: 300, y: 60, width: 840, height: 800 },
+  clip: { x: 340, y: 50, width: 800, height: 800 },
 });
-await page.evaluate(() => document.body.classList.remove('ui-hidden'));
+await page.evaluate(() => {
+  for (const sel of ['.topbar', '.lede', '.readout', '.strip', '.credits']) {
+    document.querySelector(sel).style.opacity = '';
+  }
+});
 
 const stats = await page.evaluate(() => ({
   buildings: window.__cube.city.stats.buildings,

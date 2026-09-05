@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { CUBE_SIZE, HALF } from './cube.js';
+import { GROUND_TOP, SKY_BOTTOM } from './slabs.js';
 import { projector } from './data.js';
 
 const WINDOW_PATCH = {
@@ -35,7 +36,7 @@ function makeFacadeMaterial(metresPerUnitXZ, metresPerUnitY) {
     uSnowCover: { value: 0 },
     uMetres: { value: metresPerUnitXZ },
     uMetresY: { value: metresPerUnitY },
-    uGroundY: { value: -HALF },
+    uGroundY: { value: GROUND_TOP },
     uLampColor: { value: new THREE.Color(0xffc98a) },
   };
 
@@ -159,6 +160,7 @@ export class ModelCity {
       new THREE.Plane(new THREE.Vector3(-1, 0, 0), HALF * 0.995),
       new THREE.Plane(new THREE.Vector3(0, 0, 1), HALF * 0.995),
       new THREE.Plane(new THREE.Vector3(0, 0, -1), HALF * 0.995),
+      new THREE.Plane(new THREE.Vector3(0, -1, 0), SKY_BOTTOM - 0.01),
     ];
     this.metresPerUnit = 110;
     this.heightScale = 1;
@@ -206,13 +208,13 @@ export class ModelCity {
     this.materials.push(groundMat);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(CUBE_SIZE, CUBE_SIZE), groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -HALF + 0.0005;
+    ground.position.y = GROUND_TOP + 0.0005;
     ground.receiveShadow = true;
     this.group.add(ground);
 
     // ---- flat layers: water, greenery, roads ------------------------------
-    this._addFlat(osm.water, project, scale, 0x33556e, -HALF + 0.0022, 0.35, 0.0);
-    this._addFlat(osm.green, project, scale, 0x5d7a4a, -HALF + 0.0018, 0.95, 0.0);
+    this._addFlat(osm.water, project, scale, 0x33556e, GROUND_TOP + 0.0022, 0.35, 0.0);
+    this._addFlat(osm.green, project, scale, 0x5d7a4a, GROUND_TOP + 0.0018, 0.95, 0.0);
     this._addRoads(osm.roads, project, scale);
 
     // ---- buildings --------------------------------------------------------
@@ -225,7 +227,7 @@ export class ModelCity {
       let geo;
       try {
         geo = new THREE.ExtrudeGeometry(shape, {
-          depth: Math.min(b.height * vScale, CUBE_SIZE * 0.92),
+          depth: Math.min(b.height * vScale, SKY_BOTTOM - GROUND_TOP - 0.04),
           bevelEnabled: false,
           curveSegments: 1,
         });
@@ -234,7 +236,7 @@ export class ModelCity {
       }
       // Extrude builds along +Z; lay it down so height runs along +Y.
       geo.rotateX(-Math.PI / 2);
-      geo.translate(0, -HALF + 0.002, 0);
+      geo.translate(0, GROUND_TOP + 0.002, 0);
 
       const colour = new THREE.Color(
         b.colour && CSS.supports?.('color', b.colour)
@@ -314,7 +316,7 @@ export class ModelCity {
     this.roadMaterial = mat;
 
     const positions = [];
-    const y = -HALF + 0.003;
+    const y = GROUND_TOP + 0.003;
     this._roadSegments = [];
 
     for (const road of roads) {
@@ -412,7 +414,7 @@ export class ModelCity {
     const pos = new THREE.Vector3();
     const one = new THREE.Vector3(1, 1, 1);
     pools.forEach(([x, z], i) => {
-      pos.set(x, -HALF + 0.006, z);
+      pos.set(x, GROUND_TOP + 0.006, z);
       m.compose(pos, q, one);
       mesh.setMatrixAt(i, m);
     });
@@ -434,7 +436,7 @@ export class ModelCity {
     const bulbGeo = new THREE.SphereGeometry(0.7 * scale, 6, 5);
     const bulbs = new THREE.InstancedMesh(bulbGeo, bulbMat, pools.length);
     pools.forEach(([x, z], i) => {
-      m.makeTranslation(x, -HALF + 6 * vScale, z);
+      m.makeTranslation(x, GROUND_TOP + 6 * vScale, z);
       bulbs.setMatrixAt(i, m);
     });
     bulbs.instanceMatrix.needsUpdate = true;
@@ -464,9 +466,9 @@ export class ModelCity {
       const p = project(t.lat, t.lon);
       const x = p.x * scale;
       const z = p.z * scale;
-      m.makeTranslation(x, -HALF + 1.5 * vScale, z);
+      m.makeTranslation(x, GROUND_TOP + 1.5 * vScale, z);
       trunks.setMatrixAt(i, m);
-      m.makeTranslation(x, -HALF + 5.0 * vScale, z);
+      m.makeTranslation(x, GROUND_TOP + 5.0 * vScale, z);
       leaves.setMatrixAt(i, m);
       this.stats.trees++;
     });
@@ -483,9 +485,9 @@ export class ModelCity {
     mat.clippingPlanes = this.clipPlanes;
     const pin = new THREE.Mesh(new THREE.ConeGeometry(1.8 * scale, 7 * vScale, 12), mat);
     pin.rotation.x = Math.PI;
-    pin.position.y = -HALF + 10 * vScale;
+    pin.position.y = GROUND_TOP + 10 * vScale;
     const ball = new THREE.Mesh(new THREE.SphereGeometry(2.2 * scale, 14, 10), mat);
-    ball.position.y = -HALF + 14.5 * vScale;
+    ball.position.y = GROUND_TOP + 14.5 * vScale;
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xff5a3c,
       transparent: true,
@@ -495,7 +497,7 @@ export class ModelCity {
     ringMat.clippingPlanes = this.clipPlanes;
     const ring = new THREE.Mesh(new THREE.RingGeometry(3 * scale, 4.2 * scale, 32), ringMat);
     ring.rotation.x = -Math.PI / 2;
-    ring.position.y = -HALF + 0.006;
+    ring.position.y = GROUND_TOP + 0.006;
     group.add(pin, ball, ring);
     group.name = 'address-marker';
     this.marker = group;

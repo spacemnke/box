@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { CUBE_SIZE, HALF } from './cube.js';
+import { GROUND_TOP, SKY_BOTTOM } from './slabs.js';
 
 const RAIN_MAX = 9000;
 const SNOW_MAX = 6000;
@@ -13,7 +14,9 @@ const COMMON_VERT_HEAD = /* glsl */ `
   uniform float uTime;
   uniform vec2  uWind;
   uniform float uCount;      // how many instances are currently active
-  uniform float uSpan;       // cube extent the particles wrap inside
+  uniform float uSpan;       // horizontal extent the particles wrap inside
+  uniform float uBaseY;      // floor of the band the weather falls through
+  uniform float uSpanY;      // height of that band
   uniform float uSize;
   uniform float uLength;
   uniform float uFallSpeed;
@@ -47,7 +50,8 @@ const RAIN_VERT = /* glsl */ `
     vec3 p;
     p.x = wrap(base.x + uWind.x * uTime * 0.05, uSpan);
     p.z = wrap(base.z + uWind.y * uTime * 0.05, uSpan);
-    p.y = wrap(base.y - speed * uTime, uSpan);
+    // Rain only exists between the ground and the cloud base.
+    p.y = uBaseY + mod(iSeed.y * uSpanY - speed * uTime, uSpanY);
 
     // Streaks lie along the drop's own velocity, tilted by wind.
     vec3 vel = normalize(vec3(uWind.x * 0.06, -1.0, uWind.y * 0.06));
@@ -98,7 +102,7 @@ const FLAKE_VERT = /* glsl */ `
     float phase = iSeed.x * 31.4;
 
     vec3 p;
-    p.y = wrap(base.y - speed * uTime, uSpan);
+    p.y = uBaseY + mod(iSeed.y * uSpanY - speed * uTime, uSpanY);
     p.x = wrap(base.x + uWind.x * uTime * 0.05 + sin(uTime * 0.9 + phase) * uSway, uSpan);
     p.z = wrap(base.z + uWind.y * uTime * 0.05 + cos(uTime * 0.7 + phase * 1.3) * uSway, uSpan);
 
@@ -181,6 +185,8 @@ export class WeatherFX {
         uWind: shared.uWind,
         uCount: { value: 0 },
         uSpan: { value: CUBE_SIZE * 0.995 },
+        uBaseY: { value: GROUND_TOP },
+        uSpanY: { value: SKY_BOTTOM - GROUND_TOP },
         uSize: { value: 0.0035 },
         uLength: { value: 0.075 },
         uFallSpeed: { value: 2.2 },
@@ -198,6 +204,8 @@ export class WeatherFX {
         uWind: shared.uWind,
         uCount: { value: 0 },
         uSpan: { value: CUBE_SIZE * 0.995 },
+        uBaseY: { value: GROUND_TOP },
+        uSpanY: { value: SKY_BOTTOM - GROUND_TOP },
         uSize: { value: 0.012 },
         uLength: { value: 0 },
         uFallSpeed: { value: 0.16 },
@@ -217,6 +225,8 @@ export class WeatherFX {
         uWind: shared.uWind,
         uCount: { value: 0 },
         uSpan: { value: CUBE_SIZE * 0.995 },
+        uBaseY: { value: GROUND_TOP },
+        uSpanY: { value: SKY_BOTTOM - GROUND_TOP },
         uSize: { value: 0.008 },
         uLength: { value: 0 },
         uFallSpeed: { value: 0.03 },
@@ -266,13 +276,30 @@ export class WeatherFX {
       // Sheets stay inside the cube; anything wider pokes through the glass.
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(CUBE_SIZE * 0.99, CUBE_SIZE * 0.99), mat);
       mesh.rotation.x = -Math.PI / 2;
-      mesh.position.y = -HALF * 0.99 + t * CUBE_SIZE * 0.82;
+      // Fog sits in the open air between the ground and the cloud base.
+      mesh.position.y = GROUND_TOP + 0.01 + t * (SKY_BOTTOM - GROUND_TOP - 0.04);
       mesh.userData.baseHeight = mesh.position.y;
       mesh.userData.t = t;
       mesh.renderOrder = 9;
       group.add(mesh);
     }
     return group;
+  }
+
+  /**
+   * The open air changes height as the cloud deck thickens, and rain, snow and
+   * fog all have to be re-fitted into whatever gap is left.
+   */
+  setBand(bottomY, topY) {
+    const span = Math.max(topY - bottomY, 0.05);
+    for (const mesh of [this.rain, this.snow, this.drift]) {
+      mesh.material.uniforms.uBaseY.value = bottomY;
+      mesh.material.uniforms.uSpanY.value = span;
+    }
+    for (const sheet of this.fog.children) {
+      sheet.userData.baseHeight = bottomY + 0.01 + sheet.userData.t * (span - 0.04);
+      sheet.position.y = sheet.userData.baseHeight;
+    }
   }
 
   /** @param {number} quality 0.35..1 — scales particle counts for weaker GPUs */

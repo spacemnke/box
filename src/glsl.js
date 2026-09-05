@@ -302,6 +302,15 @@ export const SKYBOX_FRAG = /* glsl */ `
   void main() {
     vec3 dir = normalize(vWorldPos);
     vec3 col = uIsGround > 0.5 ? uFogColor * 0.8 : skyColor(dir);
+
+    // These walls are the far air *inside* the cube, under the cloud lid —
+    // not open sky. Under a thick deck that air is much darker than the sky
+    // above it, and it is darker still near the ground. Getting this wrong
+    // washes the whole middle of the cube out and the rain disappears into it.
+    float underDeck = mix(1.0, 0.26, uCloudCover) * mix(1.0, 0.55, uCloudDark);
+    underDeck *= mix(0.62, 1.0, smoothstep(-0.55, 0.40, dir.y));
+    col *= underDeck;
+
     col *= uExposure;
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
