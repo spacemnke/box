@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Weather Cube — a place and its sky, in a box</title>
+<meta name="description" content="Drop any address into a glass cube and watch it sit under that location's real, live weather." />
+<link rel="stylesheet" href="./styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌦️</text></svg>" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Left: the place                                                     -->
+<!-- ------------------------------------------------------------------ -->
+<aside class="panel panel-left" id="panel-left">
+  <header class="brand">
+    <h1>Weather&nbsp;Cube</h1>
+    <p class="tagline">A real address, under its real sky.</p>
+  </header>
+
+  <form class="search" id="search-form" autocomplete="off">
+    <label class="field">
+      <span class="field-label">Address</span>
+      <input
+        id="address"
+        type="text"
+        placeholder="Calle del Mar 26, Valencia 46003, Spain"
+        value="Calle del Mar 26, Valencia 46003, Spain"
+        spellcheck="false" />
+    </label>
+    <div class="search-actions">
+      <button type="submit" class="btn btn-primary" id="btn-search">Build cube</button>
+      <button type="button" class="btn" id="btn-locate" title="Use this device's location">Use my location</button>
+    </div>
+  </form>
+
+  <ul class="results" id="results" hidden></ul>
+
+  <div class="place" id="place" hidden>
+    <div class="place-name" id="place-name"></div>
+    <div class="place-coords" id="place-coords"></div>
+  </div>
+
+  <section class="group">
+    <div class="group-title">Cube contents</div>
+    <div class="segmented" role="radiogroup" aria-label="Cube contents">
+      <button type="button" class="seg" data-mode="photo" id="seg-photo" role="radio" aria-checked="false">
+        Street View
+      </button>
+      <button type="button" class="seg is-active" data-mode="model" id="seg-model" role="radio" aria-checked="true">
+        3D block model
+      </button>
+    </div>
+    <p class="hint" id="mode-hint">
+      The block model is extruded from OpenStreetMap footprints and needs no key.
+    </p>
+  </section>
+
+  <section class="group">
+    <button type="button" class="disclosure" id="key-toggle" aria-expanded="false">
+      <span>Google Street View key</span>
+      <span class="chev">▾</span>
+    </button>
+    <div class="disclosure-body" id="key-body" hidden>
+      <label class="field">
+        <span class="field-label">Maps Platform browser key</span>
+        <input id="api-key" type="password" placeholder="AIza…" spellcheck="false" />
+      </label>
+      <p class="hint">
+        Stored only in this browser (localStorage), sent only to Google. Enable
+        <strong>Street View Static API</strong> on the key. Each cube costs
+        five image requests plus one free metadata request.
+      </p>
+      <label class="checkline">
+        <input type="checkbox" id="remember-key" checked />
+        <span>Remember on this device</span>
+      </label>
+    </div>
+  </section>
+
+  <div class="status" id="status" role="status"></div>
+</aside>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Right: the weather                                                  -->
+<!-- ------------------------------------------------------------------ -->
+<aside class="panel panel-right" id="panel-right">
+  <div class="wx-head">
+    <div class="wx-temp"><span id="wx-temp">—</span><span class="deg">°C</span></div>
+    <div class="wx-meta">
+      <div class="wx-cond" id="wx-cond">Waiting for weather…</div>
+      <div class="wx-sub" id="wx-sub"></div>
+    </div>
+  </div>
+
+  <div class="wx-grid" id="wx-grid">
+    <div class="wx-cell"><span class="k">Feels like</span><span class="v" id="wx-feels">—</span></div>
+    <div class="wx-cell"><span class="k">Wind</span><span class="v" id="wx-wind">—</span></div>
+    <div class="wx-cell"><span class="k">Cloud</span><span class="v" id="wx-cloud">—</span></div>
+    <div class="wx-cell"><span class="k">Humidity</span><span class="v" id="wx-hum">—</span></div>
+    <div class="wx-cell"><span class="k">Precip</span><span class="v" id="wx-precip">—</span></div>
+    <div class="wx-cell"><span class="k">Visibility</span><span class="v" id="wx-vis">—</span></div>
+    <div class="wx-cell"><span class="k">Sun</span><span class="v" id="wx-sun">—</span></div>
+    <div class="wx-cell"><span class="k">Local time</span><span class="v" id="wx-time">—</span></div>
+  </div>
+
+  <section class="group">
+    <div class="group-title">
+      <span>Hour</span>
+      <button type="button" class="link" id="btn-now">now</button>
+    </div>
+    <input type="range" id="time-slider" min="-24" max="24" step="1" value="0" />
+    <div class="slider-caption" id="time-caption">Live conditions</div>
+  </section>
+
+  <section class="group">
+    <div class="group-title">Simulate a different sky</div>
+    <select id="override">
+      <option value="live">Use the real forecast</option>
+      <option value="clear">Clear</option>
+      <option value="partly">Partly cloudy</option>
+      <option value="overcast">Overcast</option>
+      <option value="fog">Fog</option>
+      <option value="drizzle">Drizzle</option>
+      <option value="rain">Rain</option>
+      <option value="storm">Thunderstorm</option>
+      <option value="snow">Snow</option>
+    </select>
+  </section>
+
+  <section class="group toggles">
+    <label class="checkline"><input type="checkbox" id="opt-rotate" checked /><span>Auto-rotate</span></label>
+    <label class="checkline"><input type="checkbox" id="opt-glass" checked /><span>Glass shell</span></label>
+    <label class="checkline"><input type="checkbox" id="opt-sky-replace" checked /><span>Simulate sky over photos</span></label>
+    <label class="field inline">
+      <span class="field-label">Detail</span>
+      <select id="opt-quality">
+        <option value="1">High</option>
+        <option value="0.6" selected>Balanced</option>
+        <option value="0.3">Light</option>
+      </select>
+    </label>
+  </section>
+
+  <div class="right-actions">
+    <button type="button" class="btn" id="btn-shot">Save PNG</button>
+    <button type="button" class="btn" id="btn-share">Copy link</button>
+  </div>
+</aside>
+
+<div class="attrib">
+  Weather <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> ·
+  Geocoding &amp; geometry © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors ·
+  Imagery <span id="sv-credit">Google Street View</span>
+</div>
+
+<button class="ui-toggle" id="ui-toggle" title="Hide panels">⤢</button>
+
+<div class="loader" id="loader" hidden>
+  <div class="loader-card">
+    <div class="spinner"></div>
+    <div class="loader-text" id="loader-text">Working…</div>
+    <div class="bar"><div class="bar-fill" id="loader-bar"></div></div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

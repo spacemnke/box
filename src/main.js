@@ -1,0 +1,766 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+import {
+  geocode,
+  reverseGeocode,
+  fetchWeather,
+  fetchOSM,
+  hourlyAt,
+  localStamp,
+} from './data.js';
+import { buildClimate } from './climate.js';
+import {
+  HALF,
+  CubeShell,
+  createSharedUniforms,
+  createGlass,
+  createEdges,
+  createContactShadow,
+  createNorthMarker,
+} from './cube.js';
+import { WeatherFX } from './weatherfx.js';
+import { ModelCity } from './modelcity.js';
+import { loadStreetViewCube } from './panorama.js';
+import { OVERRIDES } from './overrides.js';
+
+// The modelled square is 150 m across. Heights get a gentle exaggeration:
+// a true-to-scale block of air is mostly empty sky, which reads as nothing.
+const MODEL_RADIUS_M = 75;
+const HEIGHT_EXAGGERATION = 2.0;
+
+/* ------------------------------------------------------------------ */
+/* DOM                                                                 */
+/* ------------------------------------------------------------------ */
+
+const el = (id) => document.getElementById(id);
+const dom = {
+  canvas: el('stage'),
+  form: el('search-form'),
+  address: el('address'),
+  btnSearch: el('btn-search'),
+  btnLocate: el('btn-locate'),
+  results: el('results'),
+  place: el('place'),
+  placeName: el('place-name'),
+  placeCoords: el('place-coords'),
+  segPhoto: el('seg-photo'),
+  segModel: el('seg-model'),
+  modeHint: el('mode-hint'),
+  keyToggle: el('key-toggle'),
+  keyBody: el('key-body'),
+  apiKey: el('api-key'),
+  rememberKey: el('remember-key'),
+  status: el('status'),
+  wxTemp: el('wx-temp'),
+  wxCond: el('wx-cond'),
+  wxSub: el('wx-sub'),
+  wxFeels: el('wx-feels'),
+  wxWind: el('wx-wind'),
+  wxCloud: el('wx-cloud'),
+  wxHum: el('wx-hum'),
+  wxPrecip: el('wx-precip'),
+  wxVis: el('wx-vis'),
+  wxSun: el('wx-sun'),
+  wxTime: el('wx-time'),
+  timeSlider: el('time-slider'),
+  timeCaption: el('time-caption'),
+  btnNow: el('btn-now'),
+  override: el('override'),
+  optRotate: el('opt-rotate'),
+  optGlass: el('opt-glass'),
+  optSkyReplace: el('opt-sky-replace'),
+  optQuality: el('opt-quality'),
+  btnShot: el('btn-shot'),
+  btnShare: el('btn-share'),
+  uiToggle: el('ui-toggle'),
+  loader: el('loader'),
+  loaderText: el('loader-text'),
+  loaderBar: el('loader-bar'),
+  svCredit: el('sv-credit'),
+};
+
+/* ------------------------------------------------------------------ */
+/* State                                                               */
+/* ------------------------------------------------------------------ */
+
+const state = {
+  place: null, // { label, lat, lon }
+  weather: null,
+  panoMeta: null,
+  mode: 'model',
+  photoReady: false,
+  timeOffsetHours: 0,
+  override: 'live',
+  quality: 0.6,
+  headingOffset: 0,
+  climate: null,
+  lastWeatherFetch: 0,
+};
+
+/* ------------------------------------------------------------------ */
+/* Three.js setup                                                      */
+/* ------------------------------------------------------------------ */
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: dom.canvas,
+  antialias: true,
+  alpha: true,
+  preserveDrawingBuffer: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.localClippingEnabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 100);
+camera.position.set(3.1, 1.9, 3.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 0.35;
+controls.maxDistance = 11;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+controls.target.set(0, 0, 0);
+
+const shared = createSharedUniforms();
+
+const cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+
+const shell = new CubeShell(shared);
+cubeGroup.add(shell.group);
+
+const city = new ModelCity(shared);
+cubeGroup.add(city.group);
+
+const fx = new WeatherFX(shared, city.clipPlanes);
+cubeGroup.add(fx.group);
+
+const glass = createGlass(shared);
+const edges = createEdges();
+cubeGroup.add(glass, edges);
+
+scene.add(createContactShadow());
+cubeGroup.add(createNorthMarker());
+
+// Rotating the whole cube keeps the panorama, the sun and the wind consistent
+// with each other when a heading offset is used.
+function applyHeadingOffset() {
+  cubeGroup.rotation.y = (-state.headingOffset * Math.PI) / 180;
+}
+
+// Lights only matter for the extruded model; the photo panels are unlit.
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 0.1;
+sunLight.shadow.camera.far = 14;
+sunLight.shadow.camera.left = -HALF * 1.8;
+sunLight.shadow.camera.right = HALF * 1.8;
+sunLight.shadow.camera.top = HALF * 1.8;
+sunLight.shadow.camera.bottom = -HALF * 1.8;
+sunLight.shadow.bias = -0.0004;
+sunLight.shadow.normalBias = 0.004;
+scene.add(sunLight, sunLight.target);
+
+const skyLight = new THREE.HemisphereLight(0x9fc3ff, 0x51504c, 0.9);
+scene.add(skyLight);
+
+const bounce = new THREE.DirectionalLight(0xffffff, 0.18);
+bounce.position.set(-2, -1.5, -2);
+scene.add(bounce);
+
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ------------------------------------------------------------------ */
+/* Render loop                                                         */
+/* ------------------------------------------------------------------ */
+
+const clock = new THREE.Clock();
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  shared.uTime.value = t;
+  controls.update();
+
+  const flash = fx.update(dt, t);
+  shared.uFlash.value = flash;
+
+  if (state.climate) {
+    // Lightning briefly overrides the sun for the model geometry too.
+    const c = state.climate;
+    sunLight.intensity = c.sunIntensity + flash * 2.2;
+    skyLight.intensity = c.ambientIntensity + flash * 1.0;
+  }
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+
+/* ------------------------------------------------------------------ */
+/* Applying a climate to the scene                                     */
+/* ------------------------------------------------------------------ */
+
+function applyClimate(climate) {
+  state.climate = climate;
+
+  shared.uSunDir.value.copy(climate.sunDir);
+  shared.uMoonDir.value.copy(climate.moonDir);
+  shared.uSunColor.value.copy(climate.sunColor);
+  shared.uZenith.value.copy(climate.zenith);
+  shared.uHorizon.value.copy(climate.horizon);
+  shared.uGroundHaze.value.copy(climate.groundHaze);
+  shared.uSunAltitude.value = climate.sunAltitude;
+  shared.uMoonPhase.value = climate.moonPhase;
+  shared.uCloudCover.value = climate.cloudCover;
+  shared.uCloudDark.value = climate.cloudDark;
+  shared.uNight.value = climate.night;
+  shared.uHaze.value = climate.haze;
+  shared.uExposure.value = climate.exposure;
+  shared.uWind.value.copy(climate.wind);
+  shared.uFogColor.value.copy(climate.fogColor);
+
+  shell.applyClimate(climate);
+  fx.applyClimate(climate, state.quality);
+  city.applyClimate(climate);
+
+  // Light rig
+  const d = climate.sunDir;
+  const usingMoon = d.y < -0.05;
+  const dir = usingMoon ? climate.moonDir : d;
+  sunLight.position.set(dir.x, Math.max(dir.y, 0.08), dir.z).multiplyScalar(6);
+  sunLight.target.position.set(0, -HALF, 0);
+  sunLight.color.copy(usingMoon ? new THREE.Color(0x9fb4ff) : climate.sunColor);
+  sunLight.intensity = usingMoon ? 0.14 : climate.sunIntensity;
+  sunLight.castShadow = !usingMoon && climate.sunIntensity > 0.25 && state.mode === 'model';
+
+  skyLight.color.copy(climate.zenith).lerp(new THREE.Color(0xffffff), 0.25);
+  // After dark the light bouncing back up off a street is sodium-warm, and
+  // without it the facades read as flat black cut-outs.
+  skyLight.groundColor
+    .copy(climate.groundHaze)
+    .lerp(new THREE.Color(0xff9a4e), climate.night * 0.6);
+  skyLight.intensity = climate.ambientIntensity;
+  bounce.intensity = 0.05 + climate.ambientIntensity * 0.15;
+
+  // Scene fog, for the extruded model only. Density is per world unit, and
+  // one world unit is MODEL_RADIUS_M metres of real street.
+  // 0.8 is a legibility fudge: true Koschmieder extinction hides the model
+  // entirely in dense fog, and a diorama you cannot see into is not one.
+  const density = climate.fogPerMetre * MODEL_RADIUS_M * 0.8;
+  scene.fog = density > 0.01 ? new THREE.FogExp2(climate.fogColor.getHex(), density) : null;
+
+  // Glass response
+  glass.material.uniforms.uDroplets.value = climate.rainRate * 0.9;
+  glass.material.uniforms.uFrost.value =
+    climate.temperature < 2 ? THREE.MathUtils.clamp((2 - climate.temperature) / 8, 0, 0.7) : 0;
+
+  updateReadout(climate);
+}
+
+/* ------------------------------------------------------------------ */
+/* The reading that drives the render                                  */
+/* ------------------------------------------------------------------ */
+
+function currentInstant() {
+  return Date.now() + state.timeOffsetHours * 3600 * 1000;
+}
+
+function effectiveReading() {
+  const w = state.weather;
+  if (!w) return null;
+
+  let reading;
+  if (state.timeOffsetHours === 0) {
+    reading = { ...w.current };
+    const h = hourlyAt(w, Date.now());
+    if (h) reading.snowDepth = h.snowDepth;
+  } else {
+    const h = hourlyAt(w, currentInstant());
+    if (!h) return { ...w.current };
+    reading = {
+      temperature: h.temperature,
+      apparentTemperature: h.temperature,
+      humidity: h.humidity,
+      precipitation: h.precipitation,
+      rain: h.rain,
+      snowfall: h.snowfall,
+      snowDepth: h.snowDepth,
+      weatherCode: h.weatherCode,
+      cloudCover: h.cloudCover,
+      visibility: h.visibility,
+      windSpeed: h.windSpeed,
+      windDirection: h.windDirection,
+      windGust: h.windGust,
+      isDay: h.isDay,
+    };
+  }
+
+  const override = OVERRIDES[state.override];
+  if (override) {
+    reading = { ...reading, ...override };
+    // The overridden sky is hypothetical, so a "feels like" carried over from
+    // the real forecast would be a lie. Fall back to the dry-bulb value.
+    reading.apparentTemperature = override.temperature ?? reading.temperature;
+  }
+  return reading;
+}
+
+function refreshClimate() {
+  const reading = effectiveReading();
+  if (!reading || !state.place) return;
+  const instant = currentInstant();
+  applyClimate(buildClimate(reading, new Date(instant), state.place.lat, state.place.lon));
+}
+
+/* ------------------------------------------------------------------ */
+/* Readout                                                             */
+/* ------------------------------------------------------------------ */
+
+const fmt = (v, digits = 0, suffix = '') =>
+  v === null || v === undefined || Number.isNaN(v) ? '—' : `${v.toFixed(digits)}${suffix}`;
+
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const compass = (deg) => COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+
+function updateReadout(climate) {
+  const r = climate.reading;
+  const w = state.weather;
+
+  dom.wxTemp.textContent = r.temperature === undefined ? '—' : Math.round(r.temperature);
+  dom.wxCond.textContent = climate.conditionText;
+
+  const simulated = state.override !== 'live';
+  dom.wxSub.textContent = simulated
+    ? 'Simulated sky — not the live forecast'
+    : state.timeOffsetHours === 0
+      ? `Live · ${w?.source || ''}`
+      : 'Forecast hour';
+
+  dom.wxFeels.textContent = fmt(r.apparentTemperature ?? r.temperature, 0, '°');
+  dom.wxWind.textContent =
+    r.windSpeed === undefined
+      ? '—'
+      : `${r.windSpeed.toFixed(1)} m/s ${compass(r.windDirection ?? 0)}`;
+  dom.wxCloud.textContent = fmt(r.cloudCover, 0, '%');
+  dom.wxHum.textContent = fmt(r.humidity, 0, '%');
+  dom.wxPrecip.textContent =
+    (r.snowfall ?? 0) > 0 ? `${r.snowfall.toFixed(1)} cm snow` : `${(r.precipitation ?? 0).toFixed(1)} mm`;
+  dom.wxVis.textContent =
+    climate.visibility >= 10000
+      ? `${(climate.visibility / 1000).toFixed(0)} km`
+      : `${Math.round(climate.visibility)} m`;
+  dom.wxSun.textContent = `${climate.sunAltitudeDeg > 0 ? '↑' : '↓'} ${climate.sunAltitudeDeg.toFixed(0)}°`;
+
+  if (w) {
+    const stamp = localStamp(currentInstant(), w.utcOffsetSeconds || 0);
+    dom.wxTime.textContent = stamp.slice(11);
+    dom.timeCaption.textContent =
+      state.timeOffsetHours === 0
+        ? `Live conditions · ${stamp.slice(11)} local`
+        : `${state.timeOffsetHours > 0 ? '+' : ''}${state.timeOffsetHours} h · ${stamp.replace('T', ' ')} local`;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Loading UI                                                          */
+/* ------------------------------------------------------------------ */
+
+function showLoader(text, progress = 0) {
+  dom.loader.hidden = false;
+  dom.loaderText.textContent = text;
+  dom.loaderBar.style.width = `${Math.round(progress * 100)}%`;
+}
+function hideLoader() {
+  dom.loader.hidden = true;
+}
+function setStatus(text, kind = '') {
+  dom.status.textContent = text;
+  dom.status.className = `status ${kind}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Building a cube                                                     */
+/* ------------------------------------------------------------------ */
+
+async function buildForPlace(place, { preferMode } = {}) {
+  // Panels from the previous address must not survive into this one.
+  state.photoReady = false;
+  state.panoMeta = null;
+  shell.clearTextures();
+
+  state.place = place;
+  dom.place.hidden = false;
+  dom.placeName.textContent = place.label;
+  dom.placeCoords.textContent = `${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
+  dom.results.hidden = true;
+
+  // Weather first: it is fast, and it lets the cube light up immediately.
+  try {
+    showLoader('Reading the sky…', 0.15);
+    state.weather = await fetchWeather(place.lat, place.lon);
+    state.lastWeatherFetch = Date.now();
+    refreshClimate();
+  } catch (err) {
+    setStatus(`Weather unavailable: ${err.message}`, 'error');
+  }
+
+  const wantPhoto = (preferMode || state.mode) === 'photo';
+  const key = dom.apiKey.value.trim();
+
+  // Always build the block model: it is the fallback, and it is what shows
+  // through if Street View has no coverage.
+  try {
+    showLoader('Fetching building footprints…', 0.45);
+    const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M);
+    const stats = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
+    setStatus(
+      `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, ` +
+        `heights exaggerated ${HEIGHT_EXAGGERATION}x.`,
+      'ok'
+    );
+  } catch (err) {
+    setStatus(`OpenStreetMap geometry unavailable: ${err.message}`, 'error');
+  }
+
+  if (wantPhoto && key) {
+    await loadPhotos(place, key);
+  } else if (wantPhoto && !key) {
+    setMode('model');
+    setStatus('Add a Google Maps Platform key to fill the cube with Street View.', 'error');
+    openKeyPanel();
+  } else {
+    setMode(state.mode);
+  }
+
+  hideLoader();
+  refreshClimate();
+  writeURL();
+}
+
+async function loadPhotos(place, key) {
+  try {
+    state.photoReady = false;
+    shell.clearTextures();
+    const { meta, textures } = await loadStreetViewCube(place.lat, place.lon, key, {
+      size: 640,
+      radius: 80,
+      headingOffset: state.headingOffset,
+      onProgress: ({ done, total, stage }) => {
+        showLoader(`Street View: ${stage}…`, 0.5 + (done / total) * 0.5);
+      },
+    });
+    state.panoMeta = meta;
+    for (const [name, tex] of Object.entries(textures)) shell.setFaceTexture(name, tex);
+    state.photoReady = true;
+    setMode('photo');
+
+    const dist = haversine(place.lat, place.lon, meta.lat, meta.lon);
+    setStatus(
+      `Street View panorama from ${meta.date || 'unknown date'}, ${dist.toFixed(0)} m from the address.`,
+      'ok'
+    );
+    dom.svCredit.textContent = meta.copyright || 'Google Street View';
+  } catch (err) {
+    state.photoReady = false;
+    setMode('model');
+    setStatus(`Street View: ${err.message}`, 'error');
+  }
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const p = Math.PI / 180;
+  const a =
+    0.5 -
+    Math.cos((lat2 - lat1) * p) / 2 +
+    (Math.cos(lat1 * p) * Math.cos(lat2 * p) * (1 - Math.cos((lon2 - lon1) * p))) / 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* ------------------------------------------------------------------ */
+/* Modes                                                               */
+/* ------------------------------------------------------------------ */
+
+function setMode(mode) {
+  if (mode === 'photo' && !state.photoReady) mode = 'model';
+  state.mode = mode;
+
+  shell.setMode(mode);
+  city.group.visible = mode === 'model';
+
+  dom.segPhoto.classList.toggle('is-active', mode === 'photo');
+  dom.segModel.classList.toggle('is-active', mode === 'model');
+  dom.segPhoto.setAttribute('aria-checked', String(mode === 'photo'));
+  dom.segModel.setAttribute('aria-checked', String(mode === 'model'));
+
+  dom.modeHint.textContent =
+    mode === 'photo'
+      ? 'Four Street View walls and the road surface, relit for the current weather. The sky above them is simulated.'
+      : 'The block model is extruded from OpenStreetMap footprints and needs no key.';
+
+  // Inside the photo box you want to be near the middle; the model reads
+  // better from outside.
+  controls.minDistance = mode === 'photo' ? 0.05 : 0.35;
+}
+
+function openKeyPanel() {
+  dom.keyBody.hidden = false;
+  dom.keyToggle.setAttribute('aria-expanded', 'true');
+  dom.apiKey.focus();
+}
+
+/* ------------------------------------------------------------------ */
+/* URL state                                                           */
+/* ------------------------------------------------------------------ */
+
+function writeURL() {
+  if (!state.place) return;
+  const p = new URLSearchParams();
+  p.set('q', state.place.label);
+  p.set('lat', state.place.lat.toFixed(6));
+  p.set('lon', state.place.lon.toFixed(6));
+  p.set('mode', state.mode);
+  if (state.headingOffset) p.set('heading', String(state.headingOffset));
+  if (state.override !== 'live') p.set('sky', state.override);
+  history.replaceState(null, '', `?${p}`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Events                                                              */
+/* ------------------------------------------------------------------ */
+
+dom.form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = dom.address.value.trim();
+  if (!q) return;
+  dom.btnSearch.disabled = true;
+  setStatus('Looking up the address…');
+  try {
+    showLoader('Finding the address…', 0.05);
+    const hits = await geocode(q);
+    hideLoader();
+    if (!hits.length) {
+      setStatus('No match. Try adding the city and country.', 'error');
+      return;
+    }
+    if (hits.length === 1) {
+      await buildForPlace(hits[0]);
+    } else {
+      showResults(hits);
+      setStatus('Pick the right one.');
+    }
+  } catch (err) {
+    hideLoader();
+    setStatus(`Geocoding failed: ${err.message}`, 'error');
+  } finally {
+    dom.btnSearch.disabled = false;
+  }
+});
+
+function showResults(hits) {
+  dom.results.innerHTML = '';
+  for (const hit of hits) {
+    const li = document.createElement('li');
+    li.textContent = hit.label;
+    li.addEventListener('click', () => buildForPlace(hit));
+    dom.results.appendChild(li);
+  }
+  dom.results.hidden = false;
+}
+
+dom.btnLocate.addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    setStatus('This browser will not share a location.', 'error');
+    return;
+  }
+  setStatus('Asking the browser where you are…');
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude: lat, longitude: lon } = pos.coords;
+      try {
+        const place = await reverseGeocode(lat, lon);
+        dom.address.value = place.label;
+        await buildForPlace({ ...place, lat, lon });
+      } catch {
+        await buildForPlace({ label: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, lat, lon });
+      }
+    },
+    (err) => setStatus(`Location denied: ${err.message}`, 'error'),
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+});
+
+dom.segPhoto.addEventListener('click', async () => {
+  const key = dom.apiKey.value.trim();
+  if (!state.place) return setStatus('Build a cube first.', 'error');
+  if (!key) {
+    setStatus('Street View needs a Google Maps Platform key.', 'error');
+    return openKeyPanel();
+  }
+  if (state.photoReady) return setMode('photo');
+  showLoader('Street View…', 0.5);
+  await loadPhotos(state.place, key);
+  hideLoader();
+  refreshClimate();
+});
+
+dom.segModel.addEventListener('click', () => setMode('model'));
+
+dom.keyToggle.addEventListener('click', () => {
+  const open = dom.keyBody.hidden;
+  dom.keyBody.hidden = !open;
+  dom.keyToggle.setAttribute('aria-expanded', String(open));
+});
+
+dom.apiKey.addEventListener('change', () => {
+  if (dom.rememberKey.checked) {
+    try {
+      localStorage.setItem('weathercube.key', dom.apiKey.value.trim());
+    } catch { /* private browsing */ }
+  }
+});
+dom.rememberKey.addEventListener('change', () => {
+  if (!dom.rememberKey.checked) {
+    try { localStorage.removeItem('weathercube.key'); } catch { /* ignore */ }
+  }
+});
+
+dom.timeSlider.addEventListener('input', () => {
+  state.timeOffsetHours = parseInt(dom.timeSlider.value, 10);
+  refreshClimate();
+});
+dom.btnNow.addEventListener('click', () => {
+  state.timeOffsetHours = 0;
+  dom.timeSlider.value = '0';
+  refreshClimate();
+});
+
+dom.override.addEventListener('change', () => {
+  state.override = dom.override.value;
+  refreshClimate();
+  writeURL();
+});
+
+dom.optRotate.addEventListener('change', () => (controls.autoRotate = dom.optRotate.checked));
+dom.optGlass.addEventListener('change', () => {
+  glass.visible = dom.optGlass.checked;
+  edges.visible = dom.optGlass.checked;
+});
+dom.optSkyReplace.addEventListener('change', () => {
+  const v = dom.optSkyReplace.checked ? 1 : 0;
+  for (const face of Object.values(shell.faces)) face.photo.uniforms.uSkyReplace.value = v;
+});
+dom.optQuality.addEventListener('change', () => {
+  state.quality = parseFloat(dom.optQuality.value);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, state.quality >= 1 ? 2 : 1.5));
+  refreshClimate();
+});
+
+dom.btnShot.addEventListener('click', () => {
+  renderer.render(scene, camera);
+  const link = document.createElement('a');
+  const name = (state.place?.label || 'weather-cube').split(',')[0].replace(/\W+/g, '-').toLowerCase();
+  link.download = `${name}-cube.png`;
+  link.href = renderer.domElement.toDataURL('image/png');
+  link.click();
+});
+
+dom.btnShare.addEventListener('click', async () => {
+  writeURL();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    setStatus('Link copied.', 'ok');
+  } catch {
+    setStatus(location.href);
+  }
+});
+
+dom.uiToggle.addEventListener('click', () => {
+  document.body.classList.toggle('ui-hidden');
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'h') document.body.classList.toggle('ui-hidden');
+  if (e.key === 'r') dom.optRotate.click();
+});
+
+/* Keep live conditions live. */
+setInterval(async () => {
+  if (!state.place || state.timeOffsetHours !== 0) return;
+  if (Date.now() - state.lastWeatherFetch < 9 * 60 * 1000) return;
+  try {
+    state.weather = await fetchWeather(state.place.lat, state.place.lon);
+    state.lastWeatherFetch = Date.now();
+    refreshClimate();
+  } catch { /* keep the last good reading */ }
+}, 60 * 1000);
+
+/* ------------------------------------------------------------------ */
+/* Boot                                                                */
+/* ------------------------------------------------------------------ */
+
+(function boot() {
+  try {
+    const saved = localStorage.getItem('weathercube.key');
+    if (saved) dom.apiKey.value = saved;
+  } catch { /* ignore */ }
+
+  const params = new URLSearchParams(location.search);
+  const heading = parseFloat(params.get('heading'));
+  if (Number.isFinite(heading)) {
+    state.headingOffset = ((heading % 360) + 360) % 360;
+    applyHeadingOffset();
+  }
+  const lat = parseFloat(params.get('lat'));
+  const lon = parseFloat(params.get('lon'));
+  const q = params.get('q');
+  if (params.get('sky')) {
+    state.override = params.get('sky');
+    dom.override.value = state.override;
+  }
+  const mode = params.get('mode') === 'photo' ? 'photo' : 'model';
+
+  // Nothing has loaded yet — give the cube a plausible sky so it is never blank.
+  applyClimate(
+    buildClimate(
+      { temperature: 18, cloudCover: 25, weatherCode: 1, windSpeed: 3, windDirection: 90, humidity: 55 },
+      new Date(),
+      39.4735,
+      -0.3733
+    )
+  );
+  setMode('model');
+
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    dom.address.value = q || `${lat}, ${lon}`;
+    buildForPlace({ label: q || `${lat.toFixed(5)}, ${lon.toFixed(5)}`, lat, lon }, { preferMode: mode });
+  } else {
+    // Default to the address in the brief so the page is never empty.
+    dom.form.requestSubmit();
+  }
+})();
+
+/* Expose a little of the app for debugging and for the smoke test. */
+window.__cube = { state, scene, camera, controls, renderer, shell, city, fx, glass, applyClimate, buildClimate, setMode };

@@ -1,0 +1,14 @@
+{
+  "name": "weather-cube",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A cube of any address, under that address's live weather.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
+}
