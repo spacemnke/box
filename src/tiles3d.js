@@ -18,6 +18,56 @@ import { GROUND_TOP } from './slabs.js';
 import { NOISE } from './glsl.js';
 
 const DEG = Math.PI / 180;
+const TILES_ROOT = 'https://tile.googleapis.com/v1/3dtiles/root.json';
+
+/**
+ * Ask Google directly whether this key may fetch 3D tiles, and relay whatever
+ * they say. The tiles renderer swallows the response body, and "it didn't
+ * work" is not something anyone can act on — Google's own message names the
+ * problem precisely.
+ * @returns {Promise<{ok: boolean, message?: string, detail?: string}>}
+ */
+export async function probeTilesAccess(key) {
+  let res;
+  try {
+    res = await fetch(`${TILES_ROOT}?key=${encodeURIComponent(key)}`);
+  } catch {
+    return {
+      ok: false,
+      message: 'Could not reach tile.googleapis.com — check the network, or an ad blocker.',
+    };
+  }
+  if (res.ok) return { ok: true };
+
+  let detail = '';
+  let reason = '';
+  try {
+    const body = await res.json();
+    detail = body?.error?.message || '';
+    reason = body?.error?.details?.[0]?.reason || body?.error?.status || '';
+  } catch { /* not JSON */ }
+
+  const blob = `${reason} ${detail}`.toLowerCase();
+  let message;
+  if (blob.includes('referer') || blob.includes('referrer')) {
+    // The usual cause. Browsers send only the origin on cross-origin requests
+    // under the default referrer policy, so a key restricted to a path never
+    // matches. The restriction has to be origin-wide.
+    message =
+      'Google is blocking the referrer. Your key is restricted to a URL with a path, ' +
+      'but browsers only send the origin, so it never matches. Change the website ' +
+      `restriction to ${location.origin}/*`;
+  } else if (blob.includes('billing')) {
+    message = 'Billing is not enabled on the key\u2019s Google Cloud project.';
+  } else if (blob.includes('service_disabled') || blob.includes('has not been used') || blob.includes('is disabled')) {
+    message = 'The Map Tiles API is not enabled on this key\u2019s project.';
+  } else if (blob.includes('api key not valid') || blob.includes('api_key_invalid')) {
+    message = 'Google does not recognise this API key.';
+  } else {
+    message = `Google refused the tiles request (HTTP ${res.status}).`;
+  }
+  return { ok: false, message, detail };
+}
 
 /* ------------------------------------------------------------------ */
 /* Relighting                                                          */
