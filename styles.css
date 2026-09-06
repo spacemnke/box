@@ -435,8 +435,9 @@ input::placeholder { color: rgba(242, 244, 247, 0.22); }
   border: 1px solid var(--hair);
   border-radius: 9px;
 }
+.segmented.three { grid-template-columns: 1fr 1fr 1fr; }
 .seg {
-  padding: 8px 6px;
+  padding: 8px 4px;
   font: inherit; font-size: 12px;
   color: var(--ink-3);
   background: none; border: 0; border-radius: 6px;

@@ -11,7 +11,13 @@
 {
   "imports": {
     "three": "./vendor/three/three.module.js",
-    "three/addons/": "./vendor/three/addons/"
+    "three/addons/": "./vendor/three/addons/",
+    "3d-tiles-renderer": "./vendor/3d-tiles-renderer/index.js",
+    "3d-tiles-renderer/three": "./vendor/3d-tiles-renderer/index.three.js",
+    "3d-tiles-renderer/core": "./vendor/3d-tiles-renderer/index.core.js",
+    "3d-tiles-renderer/plugins": "./vendor/3d-tiles-renderer/index.plugins.js",
+    "3d-tiles-renderer/three/plugins": "./vendor/3d-tiles-renderer/index.three-plugins.js",
+    "3d-tiles-renderer/core/plugins": "./vendor/3d-tiles-renderer/index.core-plugins.js"
   }
 }
 </script>
@@ -127,9 +133,10 @@
 
   <div class="block">
     <span class="label">Cube contents</span>
-    <div class="segmented" role="radiogroup" aria-label="Cube contents">
-      <button type="button" class="seg" id="seg-photo" role="radio" aria-checked="false">Street View</button>
+    <div class="segmented three" role="radiogroup" aria-label="Cube contents">
       <button type="button" class="seg is-active" id="seg-model" role="radio" aria-checked="true">Block model</button>
+      <button type="button" class="seg" id="seg-photoreal" role="radio" aria-checked="false">Photoreal 3D</button>
+      <button type="button" class="seg" id="seg-photo" role="radio" aria-checked="false">Street View</button>
     </div>
     <p class="note" id="mode-hint">
       The block model is extruded from OpenStreetMap footprints and needs no key.
@@ -153,7 +160,7 @@
 
   <div class="block">
     <button type="button" class="disclosure" id="key-toggle" aria-expanded="false">
-      <span>Google Street View key</span><span class="chev">▾</span>
+      <span>Google Maps Platform key</span><span class="chev">▾</span>
     </button>
     <div id="key-body" hidden>
       <label class="field">
@@ -161,8 +168,10 @@
         <input id="api-key" type="password" placeholder="AIza…" spellcheck="false" />
       </label>
       <p class="note">
-        Kept in this browser only, sent only to Google. Needs the
-        <strong>Street View Static API</strong> enabled. Five image requests per cube.
+        Kept in this browser only, sent only to Google. Enable
+        <strong>Street View Static API</strong> for the photo walls and
+        <strong>Map Tiles API</strong> for Photoreal 3D. Street View costs five
+        image requests per cube; 3D tiles are billed per root-tile session.
       </p>
       <label class="check"><input type="checkbox" id="remember-key" checked /><span>Remember on this device</span></label>
     </div>
