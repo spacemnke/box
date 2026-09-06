@@ -24,14 +24,15 @@ The buildings stand on top of the ground block, in the air.
 
 The cube can be filled three ways:
 
-**3D block model** — the actual building footprints around the address,
-extruded from OpenStreetMap, with the real street network, courtyards, parks
-and street trees. Needs no key at all, so it is what loads by default.
-
 **Photoreal 3D** — Google's Photorealistic 3D Tiles: the photogrammetry mesh
 of the block, true shapes, true heights, true façades, cut to the cube and
-relit for the weather. This is the one where you recognise your own roof.
-Needs a Google Maps Platform key with the Map Tiles API enabled.
+relit for the weather. This is the one where you recognise your own roof, and
+it is the default. Needs a Google Maps Platform key with the Map Tiles API
+enabled; without one the block model loads instead.
+
+**3D block model** — the actual building footprints around the address,
+extruded from OpenStreetMap, with the real street network, courtyards, parks
+and street trees. Needs no key at all.
 
 **Street View** — four Google Street View walls at north, east, south and west
 plus the road surface underfoot, from the panorama nearest the address. Needs
@@ -64,9 +65,9 @@ and no CDN.
 ## Using it
 
 1. Type an address and press **Build cube**, or press **Use my location**.
-2. The block model appears immediately.
-3. To switch to photographs, open **Google Street View key**, paste a key, and
-   press **Street View**.
+2. With a Google key saved, the photoreal block streams in. Without one, the
+   block model appears instead.
+3. The mode you pick is remembered on the device.
 
 Controls: drag to orbit, scroll to zoom — zoom right in and you are standing
 inside the cube. `c` opens and closes the controls drawer, `r` toggles
@@ -87,7 +88,12 @@ One browser key, on a project with billing set up, with:
 - **Street View Static API** enabled, for the photo walls
 
 The key is kept in `localStorage` in your browser and sent only to Google.
-Restrict it by HTTP referrer before you put it anywhere public.
+
+**Restricting it by website: use the origin, with no path.**
+`https://your.site/*`, not `https://your.site/some/page/*`. Under the default
+referrer policy a browser sends only the origin on cross-origin requests, so a
+restriction that includes a path never matches and Google returns 403. The app
+detects this case and says so by name.
 
 **Costs.** Street View is five image requests per cube plus one free metadata
 request. 3D Tiles are billed per root-tile session; the loader restricts

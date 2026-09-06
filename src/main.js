@@ -16,7 +16,7 @@ import { AtmosphereSlab, GroundSlab, GROUND_TOP, SKY_BOTTOM } from './slabs.js';
 import { WeatherFX } from './weatherfx.js';
 import { ModelCity } from './modelcity.js';
 import { loadStreetViewCube } from './panorama.js';
-import { Photoreal } from './tiles3d.js';
+import { Photoreal, probeTilesAccess } from './tiles3d.js';
 import { OVERRIDES } from './overrides.js';
 
 // The modelled square is 150 m across. Heights get a gentle exaggeration:
@@ -96,7 +96,8 @@ const state = {
   place: null,
   weather: null,
   panoMeta: null,
-  mode: 'model',
+  mode: 'model',          // what is on screen now
+  preferredMode: 'photoreal', // what the viewer asked for
   photoReady: false,
   timeOffsetHours: 0,
   override: 'live',
@@ -549,41 +550,44 @@ async function buildForPlace(place, { preferMode } = {}) {
     setStatus(`Weather unavailable: ${err.message}`, 'error');
   }
 
-  const wantPhoto = (preferMode || state.mode) === 'photo';
+  const want = preferMode || state.preferredMode;
+  const wantPhoto = want === 'photo';
   const key = dom.apiKey.value.trim();
 
   // Always build the block model: it is the fallback, and it is what shows
   // through if Street View has no coverage.
+  let stats = 'Block model';
   try {
     showLoader('Cutting the ground', 0.45);
     setStatus('Fetching building footprints from OpenStreetMap…');
     const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M, (host) => {
       showLoader(`Cutting the ground · ${host}`, 0.45);
     });
-    const stats = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
-    setStatus(
-      stats.buildings
-        ? `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`
-        : `OpenStreetMap has no building footprints mapped within ${MODEL_RADIUS_M} m of here.`,
-      stats.buildings ? 'ok' : 'error'
-    );
+    const built = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
+    stats = built.buildings
+      ? `${built.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`
+      : `OpenStreetMap has no building footprints mapped within ${MODEL_RADIUS_M} m of here`;
+    setStatus(stats, built.buildings ? 'ok' : 'error');
   } catch (err) {
     setStatus(`No footprints: ${err.message}. Press Build cube to retry.`, 'error');
   }
 
-  const wantPhotoreal = (preferMode || state.mode) === 'photoreal';
+  const wantPhotoreal = want === 'photoreal';
   photoreal.dispose();
 
   if (wantPhoto && key) {
     await loadPhotos(place, key);
   } else if (wantPhotoreal && key) {
     await loadPhotoreal(place, key);
-  } else if ((wantPhoto || wantPhotoreal) && !key) {
+  } else if (wantPhoto || wantPhotoreal) {
+    // No key: the block model is a real fallback, not a failure.
     setMode('model');
-    setStatus('Add a Google Maps Platform key for Street View or Photoreal 3D.', 'error');
-    openKeyPanel();
+    setStatus(
+      `${stats} · add a Google Maps Platform key in Controls for photorealistic 3D`,
+      'ok'
+    );
   } else {
-    setMode(state.mode);
+    setMode('model');
   }
 
   hideLoader();
@@ -663,10 +667,19 @@ function setMode(mode) {
 }
 
 async function loadPhotoreal(place, key) {
-  showLoader('Google 3D Tiles', 0.6);
+  showLoader('Checking the key with Google', 0.55);
+  const probe = await probeTilesAccess(key);
+  if (!probe.ok) {
+    hideLoader();
+    setStatus(probe.detail ? `${probe.message} (${probe.detail})` : probe.message, 'error');
+    setMode('model');
+    return;
+  }
+
+  showLoader('Google 3D Tiles', 0.7);
   photoreal.load(place.lat, place.lon, key, MODEL_RADIUS_M, camera, renderer);
-  // Give the root request a moment so a bad key fails here rather than later.
-  await new Promise((r) => setTimeout(r, 900));
+  // Give the first tiles a moment so a late failure surfaces here.
+  await new Promise((r) => setTimeout(r, 1200));
   hideLoader();
   if (photoreal.status !== 'error') setMode('photoreal');
 }
@@ -768,6 +781,7 @@ dom.btnLocate.addEventListener('click', () => {
 });
 
 dom.segPhoto.addEventListener('click', async () => {
+  rememberMode('photo');
   const key = dom.apiKey.value.trim();
   if (!state.place) return setStatus('Build a cube first.', 'error');
   if (!key) {
@@ -781,9 +795,20 @@ dom.segPhoto.addEventListener('click', async () => {
   refreshClimate();
 });
 
-dom.segModel.addEventListener('click', () => setMode('model'));
+function rememberMode(mode) {
+  state.preferredMode = mode;
+  try {
+    localStorage.setItem('weathercube.mode', mode);
+  } catch { /* private browsing */ }
+}
+
+dom.segModel.addEventListener('click', () => {
+  rememberMode('model');
+  setMode('model');
+});
 
 dom.segPhotoreal.addEventListener('click', async () => {
+  rememberMode('photoreal');
   const key = dom.apiKey.value.trim();
   if (!state.place) return setStatus('Build a cube first.', 'error');
   if (!key) {
@@ -906,7 +931,19 @@ setInterval(async () => {
     state.override = params.get('sky');
     dom.override.value = state.override;
   }
-  const mode = ['photo', 'photoreal'].includes(params.get('mode')) ? params.get('mode') : 'model';
+  // Photoreal is the default; a URL parameter wins, then the last choice made
+  // on this device.
+  let saved = null;
+  try {
+    saved = localStorage.getItem('weathercube.mode');
+  } catch { /* ignore */ }
+  const valid = ['model', 'photoreal', 'photo'];
+  const mode = valid.includes(params.get('mode'))
+    ? params.get('mode')
+    : valid.includes(saved)
+      ? saved
+      : 'photoreal';
+  state.preferredMode = mode;
 
   // Nothing has loaded yet — give the cube a plausible sky so it is never blank.
   applyClimate(

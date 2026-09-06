@@ -170,8 +170,10 @@
       <p class="note">
         Kept in this browser only, sent only to Google. Enable
         <strong>Street View Static API</strong> for the photo walls and
-        <strong>Map Tiles API</strong> for Photoreal 3D. Street View costs five
-        image requests per cube; 3D tiles are billed per root-tile session.
+        <strong>Map Tiles API</strong> for Photoreal 3D.
+        If you restrict the key by website, use the origin with no path —
+        <strong>https://your.site/*</strong> — because browsers send only the
+        origin on cross-origin requests, so a path restriction never matches.
       </p>
       <label class="check"><input type="checkbox" id="remember-key" checked /><span>Remember on this device</span></label>
     </div>
