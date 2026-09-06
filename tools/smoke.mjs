@@ -294,6 +294,27 @@ const tilesInfo = await page.evaluate(() => ({
 console.log('photoreal:', tilesInfo);
 process.stdout.write('rendered tiles-day, tiles-night-rain\n');
 
+/* ---- Phone sideways: short and wide, the layout that clipped the dial ---- */
+await page.setViewportSize({ width: 844, height: 390 });
+await page.waitForTimeout(600);
+await page.screenshot({ path: path.join(outDir, '14-landscape-phone.png') });
+const shortFit = await page.evaluate(() => {
+  const r = document.querySelector('.readout').getBoundingClientRect();
+  const l = document.querySelector('.lede').getBoundingClientRect();
+  return {
+    readoutTop: Math.round(r.top),
+    readoutBottom: Math.round(r.bottom),
+    ledeTop: Math.round(l.top),
+    ledeBottom: Math.round(l.bottom),
+    h: window.innerHeight,
+  };
+});
+console.log('landscape phone:', shortFit);
+if (shortFit.readoutTop < 0 || shortFit.readoutBottom > shortFit.h)
+  problems.push(`[layout] readout clipped: ${JSON.stringify(shortFit)}`);
+if (shortFit.ledeTop < 0 || shortFit.ledeBottom > shortFit.h)
+  problems.push(`[layout] headline clipped: ${JSON.stringify(shortFit)}`);
+
 /* ---- Phone: the whole cube has to fit a portrait viewport ---- */
 await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(600);

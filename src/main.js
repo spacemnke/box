@@ -223,7 +223,10 @@ const CUBE_RADIUS = Math.sqrt(3);
  */
 function fitCamera() {
   const portrait = camera.aspect < 0.9;
-  const margin = portrait ? 1.02 : 1.12;
+  // A short landscape window puts the top bar and the credits hard against
+  // the cube, so it gets pushed further away to leave them room.
+  const short = window.innerHeight < 620;
+  const margin = portrait ? 1.02 : short ? 1.34 : 1.12;
   const vHalf = THREE.MathUtils.degToRad(camera.fov) / 2;
   const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
   const distance = (CUBE_RADIUS * margin) / Math.sin(Math.min(vHalf, hHalf));
