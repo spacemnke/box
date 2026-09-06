@@ -27,6 +27,7 @@ import { ModelCity } from './modelcity.js';
 import { loadStreetViewCube } from './panorama.js';
 import { Photoreal, probeTilesAccess } from './tiles3d.js';
 import { AddressMarker } from './marker.js';
+import { SkyEnvironment } from './skyenv.js';
 import { OVERRIDES } from './overrides.js';
 
 // The modelled square is 150 m across. Heights get a gentle exaggeration:
@@ -80,6 +81,10 @@ const dom = {
   segModel: el('seg-model'),
   segPhotoreal: el('seg-photoreal'),
   modeHint: el('mode-hint'),
+  lightingRow: el('lighting-row'),
+  segLit: el('seg-lit'),
+  segFlat: el('seg-flat'),
+  lightingHint: el('lighting-hint'),
   override: el('override'),
   keyToggle: el('key-toggle'),
   keyBody: el('key-body'),
@@ -118,6 +123,7 @@ const state = {
   timeOffsetHours: 0,
   override: 'live',
   quality: 0.6,
+  lighting: 'lit',
   headingOffset: 0,
   climate: null,
   lastWeatherFetch: 0,
@@ -160,6 +166,9 @@ controls.autoRotateSpeed = 0.28;
 controls.target.set(0, -0.02, 0);
 
 const shared = createSharedUniforms();
+
+// The simulated sky, as image-based lighting for everything physically lit.
+const skyEnv = new SkyEnvironment(shared);
 
 const cubeGroup = new THREE.Group();
 scene.add(cubeGroup);
@@ -301,6 +310,9 @@ function frame() {
   const dz = camera.position.z - controls.target.z;
   sky.setViewElevation(Math.atan2(camera.position.y - controls.target.y, Math.hypot(dx, dz)));
 
+  // Rebuilt only when the weather has actually changed.
+  if (skyEnv.update(renderer)) scene.environment = skyEnv.texture;
+
   const flash = fx.update(dt, t);
   shared.uFlash.value = flash;
   sky.update(t);
@@ -381,6 +393,7 @@ function applyClimate(climate) {
   shared.uWind.value.copy(climate.wind);
   shared.uFogColor.value.copy(climate.fogColor);
 
+  skyEnv.dirty = true;
   shell.applyClimate(climate);
   fx.applyClimate(climate, state.quality);
   city.applyClimate(climate);
@@ -399,7 +412,10 @@ function applyClimate(climate) {
   sunLight.target.position.set(0, GROUND_TOP, 0);
   sunLight.color.copy(usingMoon ? new THREE.Color(0x9fb4ff) : climate.sunColor);
   sunLight.intensity = usingMoon ? 0.14 : climate.sunIntensity;
-  sunLight.castShadow = !usingMoon && climate.sunIntensity > 0.25 && state.mode === 'model';
+  sunLight.castShadow =
+    !usingMoon &&
+    climate.sunIntensity > 0.25 &&
+    (state.mode === 'model' || (state.mode === 'photoreal' && state.lighting === 'lit'));
 
   skyLight.color.copy(climate.zenith).lerp(new THREE.Color(0xffffff), 0.25);
   // After dark the light bouncing back up off a street is sodium-warm, and
@@ -407,8 +423,12 @@ function applyClimate(climate) {
   skyLight.groundColor
     .copy(climate.groundHaze)
     .lerp(new THREE.Color(0xff9a4e), climate.night * 0.6);
-  skyLight.intensity = climate.ambientIntensity;
-  bounce.intensity = 0.05 + climate.ambientIntensity * 0.15;
+  // With image-based lighting doing the ambient, the hemisphere light would
+  // otherwise count the sky twice and flatten everything out.
+  const imageLit = state.mode === 'photoreal' && state.lighting === 'lit';
+  skyLight.intensity = climate.ambientIntensity * (imageLit ? 0.3 : 1);
+  bounce.intensity = (0.05 + climate.ambientIntensity * 0.15) * (imageLit ? 0.4 : 1);
+  scene.environmentIntensity = 0.5 + climate.dayFactor * 0.7;
 
   // Scene fog, for the extruded model only. Density is per world unit, and one
   // world unit is MODEL_RADIUS_M metres of real street. 0.8 is a legibility
@@ -814,6 +834,7 @@ function setMode(mode) {
     btn.setAttribute('aria-checked', String(mode === key));
   }
   dom.modeHint.textContent = MODE_HINTS[mode];
+  dom.lightingRow.hidden = mode !== 'photoreal';
   controls.minDistance = mode === 'photo' ? 0.05 : 0.35;
 }
 
@@ -842,6 +863,31 @@ async function loadPhotoreal(place, key) {
   await new Promise((r) => setTimeout(r, 1200));
   hideLoader();
   if (photoreal.status !== 'error') setMode('photoreal');
+}
+
+const LIGHTING_HINTS = {
+  lit:
+    'The captured imagery is turned back into material colour and lit by the ' +
+    'real sun for the chosen minute, casting its own shadows. Move the hour ' +
+    'slider and watch them sweep across the block.',
+  flat:
+    'Google\u2019s own lighting, from the day the block was flown, with the ' +
+    'weather graded over it. Relighting is an estimate; this is the ' +
+    'photograph.',
+};
+
+function setLighting(lighting) {
+  state.lighting = lighting;
+  photoreal.setLighting(lighting);
+  dom.segLit.classList.toggle('is-active', lighting === 'lit');
+  dom.segFlat.classList.toggle('is-active', lighting === 'flat');
+  dom.segLit.setAttribute('aria-checked', String(lighting === 'lit'));
+  dom.segFlat.setAttribute('aria-checked', String(lighting === 'flat'));
+  dom.lightingHint.textContent = LIGHTING_HINTS[lighting];
+  try {
+    localStorage.setItem('weathercube.lighting', lighting);
+  } catch { /* private browsing */ }
+  refreshClimate();
 }
 
 function openKeyPanel() {
@@ -957,6 +1003,17 @@ dom.segPhoto.addEventListener('click', async () => {
 
 function rememberMode(mode) {
   state.preferredMode = mode;
+
+  let savedLighting = null;
+  try {
+    savedLighting = localStorage.getItem('weathercube.lighting');
+  } catch { /* ignore */ }
+  if (savedLighting === 'flat' || savedLighting === 'lit') {
+    state.lighting = savedLighting;
+    photoreal.lighting = savedLighting;
+    dom.segLit.classList.toggle('is-active', savedLighting === 'lit');
+    dom.segFlat.classList.toggle('is-active', savedLighting === 'flat');
+  }
   try {
     localStorage.setItem('weathercube.mode', mode);
   } catch { /* private browsing */ }
@@ -966,6 +1023,9 @@ dom.segModel.addEventListener('click', () => {
   rememberMode('model');
   setMode('model');
 });
+
+dom.segLit.addEventListener('click', () => setLighting('lit'));
+dom.segFlat.addEventListener('click', () => setLighting('flat'));
 
 dom.segPhotoreal.addEventListener('click', async () => {
   rememberMode('photoreal');
@@ -1029,6 +1089,8 @@ dom.optSkyReplace.addEventListener('change', () => {
 dom.optQuality.addEventListener('change', () => {
   state.quality = parseFloat(dom.optQuality.value);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, state.quality >= 1 ? 2 : 1.5));
+  // Shadow-mapping a photogrammetry mesh is the most expensive thing here.
+  photoreal.setCastShadows(state.quality >= 0.6);
   refreshClimate();
 });
 
@@ -1105,6 +1167,17 @@ setInterval(async () => {
       ? saved
       : 'photoreal';
   state.preferredMode = mode;
+
+  let savedLighting = null;
+  try {
+    savedLighting = localStorage.getItem('weathercube.lighting');
+  } catch { /* ignore */ }
+  if (savedLighting === 'flat' || savedLighting === 'lit') {
+    state.lighting = savedLighting;
+    photoreal.lighting = savedLighting;
+    dom.segLit.classList.toggle('is-active', savedLighting === 'lit');
+    dom.segFlat.classList.toggle('is-active', savedLighting === 'flat');
+  }
 
   // Nothing has loaded yet — give the cube a plausible sky so it is never blank.
   applyClimate(

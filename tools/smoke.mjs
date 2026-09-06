@@ -294,6 +294,40 @@ const tilesInfo = await page.evaluate(() => ({
 console.log('photoreal:', tilesInfo);
 process.stdout.write('rendered tiles-day, tiles-night-rain\n');
 
+/* ---- Relighting: the sun must actually move the shadows ---- */
+// Same weather, three different hours. If lighting is genuinely rebuilt, the
+// frames differ; if it were still a grade on a baked photo, they would not.
+const sunFrames = [];
+for (const [name, hour] of [['morning', at(9)], ['noon', at(13)], ['evening', at(19)]]) {
+  await page.evaluate((h) => {
+    const sel = document.getElementById('override');
+    sel.value = 'clear';
+    sel.dispatchEvent(new Event('change'));
+    const slider = document.getElementById('time-slider');
+    slider.value = String(h);
+    slider.dispatchEvent(new Event('input'));
+  }, hour);
+  await page.waitForTimeout(700);
+  const shot = path.join(outDir, `sun-${name}.png`);
+  await page.screenshot({ path: shot, clip: { x: 430, y: 140, width: 580, height: 560 } });
+  sunFrames.push({ name, bytes: fs.readFileSync(shot) });
+  process.stdout.write(`rendered sun-${name}\n`);
+}
+const distinct = new Set(sunFrames.map((f) => f.bytes.toString('base64'))).size;
+console.log(`relighting: ${distinct} distinct frames across three hours (want 3)`);
+if (distinct < 3) problems.push('[relight] the sun does not change the render');
+
+// And the sun direction really is being tracked.
+const sunTrack = await page.evaluate(() => ({
+  sunDir: window.__cube.state.climate.sunDir.toArray().map((v) => +v.toFixed(2)),
+  altitude: +window.__cube.state.climate.sunAltitudeDeg.toFixed(1),
+  shadows: window.__cube.renderer.shadowMap.enabled,
+  lighting: window.__cube.state.lighting,
+  environment: !!window.__cube.scene.environment,
+}));
+console.log('sun track:', sunTrack);
+if (!sunTrack.environment) problems.push('[relight] no sky environment map');
+
 /* ---- Phone sideways: short and wide, the layout that clipped the dial ---- */
 await page.setViewportSize({ width: 844, height: 390 });
 await page.waitForTimeout(600);

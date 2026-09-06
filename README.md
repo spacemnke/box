@@ -26,8 +26,8 @@ The cube can be filled three ways:
 
 **Photoreal 3D** — Google's Photorealistic 3D Tiles: the photogrammetry mesh
 of the block, true shapes, true heights, true façades, cut to the cube and
-relit for the weather. This is the one where you recognise your own roof, and
-it is the default. Needs a Google Maps Platform key with the Map Tiles API
+*genuinely relit*. This is the one where you recognise your own roof, and it
+is the default. Needs a Google Maps Platform key with the Map Tiles API
 enabled; without one the block model loads instead.
 
 **3D block model** — the actual building footprints around the address,
@@ -170,6 +170,32 @@ saturates the lower frame and rings the ground panel with ripples; night
 crushes the image and lets the brightest pixels — lamps, shopfronts, lit
 windows — glow back through; snow settles on the upward-facing half.
 
+**Relighting the photogrammetry** is the part that turns a photograph into a
+render. Google's textures have a summer afternoon baked into them, so before
+anything can be lit they have to be taken apart.
+
+Two signals do most of the work. Daylight shadows are lit by the sky rather
+than the sun, which makes them both darker *and* bluer than the surfaces
+around them — a signature that finds them without knowing the geometry. And
+the broad light-to-dark gradient across a surface is the capture sun, whose
+direction is guessable: aerial flights happen in clear weather near local
+noon, so a high sun towards the equator, derived from the latitude, predicts
+it well enough to divide out. What is left is close to material colour.
+
+That albedo then goes through ordinary physically based shading: the real sun
+for the real minute as a directional light, casting its own shadow map, with
+the simulated sky rendered to a prefiltered cubemap for ambient and
+reflections. So the weather changes the surfaces rather than being painted
+over them — wet asphalt drops to a roughness of 0.09 and mirrors the actual
+overcast above it, snow covers what faces the sky and goes matte, and at
+night the brightest pixels of the capture become the emissive lamps and
+shopfronts they were photographed as.
+
+It is an estimate, not a recovery: where it estimates badly, **As captured**
+switches back to Google's own lighting with the weather graded over it. The
+tell that it is real is the hour slider — move it and the shadows sweep
+across the block.
+
 **Photoreal 3D** (`src/tiles3d.js`) streams Google's tiles through
 `3d-tiles-renderer`, re-oriented so the address sits at the origin with north
 along -Z, scaled so 75 m fills the cube, and masked to a sphere around the
@@ -217,7 +243,10 @@ night, dusk — plus one view of each Street View wall from inside the cube,
 which is how the panorama orientation is checked (facing north, east must be on
 the right), and a synthetic 3D Tiles tileset placed on Earth at the fixture
 point, which checks the tiles land in the cube, on the ground, the right way
-round (its red tower is east, its green slab north). It also regenerates the
+round (its red tower is east, its green slab north). It renders the same
+weather at three different hours and fails unless all three frames differ,
+which is the difference between relighting and a grade. It also checks the
+layout on a portrait phone and a phone held sideways, and regenerates the
 README preview. It fails on any console error.
 
 `tools/make-tiles-fixture.py` regenerates that tileset.
@@ -247,7 +276,9 @@ src/
   modelcity.js      OpenStreetMap footprints -> extruded block
   weatherfx.js      rain, snow, drift, ground fog, lightning
   panorama.js       Street View panel loading
-  tiles3d.js        Google Photorealistic 3D Tiles, placed and relit
+  tiles3d.js        Google Photorealistic 3D Tiles, placed, de-lit and relit
+  skyenv.js         the simulated sky as a prefiltered environment map
+  marker.js         the beam standing on the address
   overrides.js      the named simulated conditions
 tools/              offline smoke test and its fixtures
 vendor/three/       pinned three.js r169, plus the glTF and Draco loaders

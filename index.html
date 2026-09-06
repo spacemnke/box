@@ -147,6 +147,18 @@
     <p class="note" id="mode-hint">
       The block model is extruded from OpenStreetMap footprints and needs no key.
     </p>
+
+    <div class="sub" id="lighting-row">
+      <span class="label">Lighting</span>
+      <div class="segmented" role="radiogroup" aria-label="Lighting">
+        <button type="button" class="seg is-active" id="seg-lit" role="radio" aria-checked="true">Relit</button>
+        <button type="button" class="seg" id="seg-flat" role="radio" aria-checked="false">As captured</button>
+      </div>
+      <p class="note" id="lighting-hint">
+        The captured imagery is turned back into material colour and lit by the
+        real sun for the chosen minute, casting its own shadows.
+      </p>
+    </div>
   </div>
 
   <div class="block">
