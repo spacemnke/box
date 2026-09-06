@@ -217,6 +217,15 @@ windows after dark, more of them on ground floors — and street lamps are space
 along the real road centrelines, so a night cube shows the shape of the actual
 neighbourhood.
 
+## What is not built yet
+
+[`docs/reconstruction-brief.md`](docs/reconstruction-brief.md) specifies a
+fourth mode, in which the buildings are generated from data rather than
+streamed as a mesh: OpenStreetMap gives exact footprints, Google's
+photogrammetry is raycast to measure real heights and roof forms, and clean
+parametric geometry is built from the measurements. Photogrammetry as an
+instrument rather than as a picture.
+
 ## Data sources
 
 | what | who | key needed |
