@@ -128,9 +128,10 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 
 // A long lens and a high three-quarter view: the cube reads as an object on a
-// table rather than a room you are standing in.
+// table rather than a room you are standing in. Steep enough to look down
+// into the block; the cloud lid thins out at this angle so it does not hide it.
 const camera = new THREE.PerspectiveCamera(29, 1, 0.05, 100);
-camera.position.set(4.05, 3.15, 4.65);
+camera.position.set(3.1, 5.3, 3.55);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -236,6 +237,11 @@ function frame() {
 
   shared.uTime.value = t;
   controls.update();
+
+  // How far overhead the camera is decides how much lid gets in the way.
+  const dx = camera.position.x - controls.target.x;
+  const dz = camera.position.z - controls.target.z;
+  sky.setViewElevation(Math.atan2(camera.position.y - controls.target.y, Math.hypot(dx, dz)));
 
   const flash = fx.update(dt, t);
   shared.uFlash.value = flash;
