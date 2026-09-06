@@ -42,6 +42,9 @@ numbers.
 
 ## Running it
 
+**Live:** https://spacemnke.github.io/box/ — deployed by the Pages workflow on
+every push.
+
 It is a static site with no build step. Because it uses ES modules it has to be
 served over HTTP rather than opened from the filesystem.
 
