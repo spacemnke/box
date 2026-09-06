@@ -26,6 +26,7 @@ import { WeatherFX } from './weatherfx.js';
 import { ModelCity } from './modelcity.js';
 import { loadStreetViewCube } from './panorama.js';
 import { Photoreal, probeTilesAccess } from './tiles3d.js';
+import { AddressMarker } from './marker.js';
 import { OVERRIDES } from './overrides.js';
 
 // The modelled square is 150 m across. Heights get a gentle exaggeration:
@@ -97,6 +98,10 @@ const dom = {
   loader: el('loader'),
   loaderText: el('loader-text'),
   loaderBar: el('loader-bar'),
+  // marker label
+  pinLabel: el('pin-label'),
+  pinWhat: el('pin-what'),
+  pinPrecision: el('pin-precision'),
 };
 
 /* ------------------------------------------------------------------ */
@@ -184,6 +189,8 @@ photoreal.onStatus = (what) => {
   } else if (what === 'streaming') {
     setStatus('Streaming Google 3D Tiles…', 'ok');
   } else if (what === 'ground') {
+    // The marker stands on the street, wherever the tiles put it.
+    marker.setGroundY(GROUND_TOP);
     // The tiles are not height-exaggerated, so one cube unit is MODEL_RADIUS_M metres.
     const metres = -photoreal.groundOffset * MODEL_RADIUS_M;
     setStatus(`Photorealistic 3D Tiles · street level ${metres >= 0 ? '+' : ''}${metres.toFixed(0)} m above the ellipsoid`, 'ok');
@@ -193,6 +200,9 @@ photoreal.onStatus = (what) => {
 const glass = createGlass(shared);
 const edges = createEdges();
 cubeGroup.add(glass, edges);
+
+const marker = new AddressMarker();
+cubeGroup.add(marker.group);
 
 scene.add(createContactShadow());
 cubeGroup.add(createNorthMarker());
@@ -311,9 +321,42 @@ function frame() {
     skyLight.intensity = c.ambientIntensity + flash * 1.0;
   }
 
+  marker.update(t);
   renderer.render(scene, camera);
+  positionPinLabel();
 }
 requestAnimationFrame(frame);
+
+/* ------------------------------------------------------------------ */
+/* The address label, following its marker                             */
+/* ------------------------------------------------------------------ */
+
+const pinScreen = new THREE.Vector3();
+
+function positionPinLabel() {
+  if (!state.place || dom.pinLabel.hidden) return;
+  pinScreen.copy(marker.headWorld).applyMatrix4(cubeGroup.matrixWorld).project(camera);
+  // z beyond 1 means the point is behind the camera.
+  if (pinScreen.z > 1) {
+    dom.pinLabel.style.opacity = '0';
+    return;
+  }
+  dom.pinLabel.style.opacity = '1';
+  dom.pinLabel.style.left = `${((pinScreen.x + 1) / 2) * window.innerWidth}px`;
+  dom.pinLabel.style.top = `${((1 - pinScreen.y) / 2) * window.innerHeight - 10}px`;
+}
+
+const PRECISION_NOTE = {
+  house: 'exact address',
+  street: 'street match, not the door',
+  area: 'approximate',
+};
+
+function showPinLabel(place) {
+  dom.pinWhat.textContent = shortPlace(place.label);
+  dom.pinPrecision.textContent = PRECISION_NOTE[place.precision] || '';
+  dom.pinLabel.hidden = false;
+}
 
 /* ------------------------------------------------------------------ */
 /* Applying a climate to the scene                                     */
@@ -341,6 +384,7 @@ function applyClimate(climate) {
   shell.applyClimate(climate);
   fx.applyClimate(climate, state.quality);
   city.applyClimate(climate);
+  marker.applyClimate(climate);
   sky.applyClimate(climate);
   groundSlab.applyClimate(climate);
   photoreal.applyClimate(climate);
@@ -548,9 +592,15 @@ async function buildForPlace(place, { preferMode } = {}) {
   shell.clearTextures();
 
   state.place = place;
-  dom.placeCoords.textContent = `${place.label} · ${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
+  dom.placeCoords.textContent =
+    `${place.label} · ${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}` +
+    (place.precision && place.precision !== 'house'
+      ? ` · matched the ${place.precision}, so the marker may be off by some metres`
+      : '');
   dom.ledePlace.textContent = `${shortPlace(place.label)}.`;
   dom.results.hidden = true;
+  marker.setGroundY(GROUND_TOP);
+  showPinLabel(place);
 
   try {
     showLoader('Reading the sky', 0.15);
@@ -603,6 +653,7 @@ async function buildForPlace(place, { preferMode } = {}) {
 
   hideLoader();
   refreshClimate();
+  if (!userMovedCamera) fitCamera();
   writeURL();
 }
 

@@ -45,6 +45,38 @@ body {
   text-transform: uppercase;
 }
 
+/* The address label, following its marker in the scene. */
+.pin-label {
+  position: fixed;
+  z-index: 2;
+  transform: translate(-50%, -100%);
+  padding: 5px 9px 6px;
+  border-radius: 7px;
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid rgba(255, 122, 82, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+  white-space: nowrap;
+  line-height: 1.3;
+  transition: opacity 0.25s ease;
+}
+.pin-label[hidden] { display: none; }
+.pin-what {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #ffcbb8;
+}
+.pin-precision {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 203, 184, 0.5);
+}
+.pin-precision:empty { display: none; }
+
 /* ---------------------------------------------------------------- */
 /* Top bar                                                           */
 /* ---------------------------------------------------------------- */
