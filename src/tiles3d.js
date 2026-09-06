@@ -73,10 +73,160 @@ export async function probeTilesAccess(key) {
 /* Relighting                                                          */
 /* ------------------------------------------------------------------ */
 
-// Photogrammetry is a photograph wrapped around geometry: it carries the
-// sunlight of the day it was flown. So, as with the Street View walls, the
-// weather is applied as a grade on top of it rather than as real lighting.
-function makeRelitMaterial(source, uniforms, clipPlanes) {
+/**
+ * The sun the photogrammetry was flown under. Aerial capture happens in clear
+ * weather near local noon, so a high sun towards the equator is a good guess,
+ * and knowing roughly where it was is what lets its shadows be divided out.
+ */
+export function captureSunDirection(lat) {
+  const towardsEquator = lat >= 0 ? Math.PI : 0; // south in the north, north in the south
+  const altitude = THREE.MathUtils.degToRad(Math.max(35, 90 - Math.abs(Math.abs(lat) - 23.4)));
+  const c = Math.cos(altitude);
+  return new THREE.Vector3(c * Math.sin(towardsEquator), Math.sin(altitude), -c * Math.cos(towardsEquator))
+    .normalize();
+}
+
+// Shared by both materials.
+const RELIGHT_PARS = /* glsl */ `
+  varying vec3 vNrmW;
+  uniform float uNight;
+  uniform float uWet;
+  uniform float uSnowCover;
+  uniform float uCloudCover;
+  uniform float uExposure;
+  uniform float uFlash;
+  uniform vec3  uSunColor;
+  uniform vec3  uSunDir;
+  uniform vec3  uCaptureSun;
+  uniform float uDelight;
+
+  ${NOISE}
+
+  vec3 saturate3(vec3 c, float amount) {
+    float l = luma(c);
+    return mix(vec3(l), c, amount);
+  }
+
+  /**
+   * Recover something close to material colour from a texture with a summer
+   * afternoon baked into it.
+   *
+   * Two things are removed. Daylight shadows are lit by the sky rather than
+   * the sun, so they are both darker and bluer than the surfaces around them
+   * — that signature finds them without needing to know the geometry. And the
+   * broad light-to-dark gradient across a surface is the capture sun, which
+   * the normal predicts well enough to divide out.
+   *
+   * It cannot be exact. What survives is good enough that a new sun looks
+   * like the only sun.
+   */
+  vec3 delight(vec3 c, vec3 n) {
+    float l = luma(c);
+    float blueShift = c.b - (c.r + c.g) * 0.5;
+    float shadow = smoothstep(-0.01, 0.09, blueShift) * smoothstep(0.62, 0.10, l);
+    shadow *= uDelight;
+
+    // Lift the shadow towards full daylight and take the sky's blue out of it.
+    vec3 lifted = c * mix(1.0, 2.0, shadow);
+    lifted = mix(lifted, vec3(luma(lifted)) * 1.04, shadow * 0.45);
+
+    // Divide out the directional term the capture sun left behind.
+    float bakedNdotL = clamp(dot(n, uCaptureSun) * 0.5 + 0.5, 0.0, 1.0);
+    float bakedIrradiance = mix(1.0, 0.66 + 0.46 * bakedNdotL, uDelight);
+    vec3 albedo = lifted / max(bakedIrradiance, 0.5);
+
+    // Albedo, not radiance: masonry, render and asphalt sit well below white,
+    // and leaving the capture's exposure in blows the relit result out.
+    albedo *= 0.80;
+
+    // Photogrammetry is noisy; a little desaturation keeps stray colour from
+    // being amplified into confetti by the division.
+    albedo = saturate3(albedo, 0.92);
+    return clamp(albedo, 0.0, 1.05);
+  }
+`;
+
+const VERTEX_NORMAL_PATCH = /* glsl */ `
+  #include <begin_vertex>
+  vNrmW = normalize(mat3(modelMatrix) * normal);
+`;
+
+/**
+ * Physically lit: the texture is turned back into approximate albedo and then
+ * lit by the real sun for the real minute, with real cast shadows and the
+ * simulated sky as ambient. Weather changes the surfaces themselves — wet
+ * asphalt goes glossy and reflects the overcast — rather than being painted
+ * over the top.
+ */
+function makeLitMaterial(source, uniforms, clipPlanes) {
+  const mat = new THREE.MeshStandardMaterial({
+    map: source.map || null,
+    color: 0xffffff,
+    vertexColors: !!source.vertexColors,
+    roughness: 0.88,
+    metalness: 0.0,
+    side: THREE.FrontSide,
+    clippingPlanes: clipPlanes,
+    envMapIntensity: 1,
+  });
+  mat.userData.uniforms = uniforms;
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+
+    shader.vertexShader = shader.vertexShader
+      .replace('void main() {', 'varying vec3 vNrmW;\nvoid main() {')
+      .replace('#include <begin_vertex>', VERTEX_NORMAL_PATCH);
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace('void main() {', `${RELIGHT_PARS}\nvoid main() {`)
+      // Albedo, once the texture and any vertex colours are both in.
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        diffuseColor.rgb = delight(diffuseColor.rgb, normalize(vNrmW));
+
+        // Snow is a material, not a tint: it covers what faces the sky.
+        float upFacing = smoothstep(0.35, 0.88, vNrmW.y);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.92, 0.96), uSnowCover * upFacing);
+        // Wet stone darkens because the water film traps light in it.
+        diffuseColor.rgb *= mix(1.0, 0.70, uWet * mix(0.5, 1.0, upFacing));`
+      )
+      // Rain makes surfaces mirror-like where it pools, and snow dead matte.
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        {
+          float up = smoothstep(0.35, 0.88, vNrmW.y);
+          float puddling = uWet * mix(0.35, 1.0, up);
+          roughnessFactor = mix(roughnessFactor, 0.09, puddling);
+          roughnessFactor = mix(roughnessFactor, 0.95, uSnowCover * up);
+        }`
+      )
+      // After dark the brightest pixels are the lit ones: lamps, shopfronts,
+      // windows. They become the light sources they were when photographed.
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        {
+          float l = luma(diffuseColor.rgb);
+          float up = smoothstep(0.35, 0.88, vNrmW.y);
+          float lamps = smoothstep(0.58, 0.95, l) * (1.0 - up * 0.65);
+          totalEmissiveRadiance += vec3(1.0, 0.76, 0.44) * lamps * uNight * 1.5;
+          totalEmissiveRadiance += vec3(0.85, 0.88, 1.0) * uFlash * 0.5;
+        }`
+      );
+  };
+  mat.customProgramCacheKey = () => 'photoreal-lit-v1';
+  return mat;
+}
+
+/**
+ * As captured: Google's own lighting, with the weather graded over it. Kept
+ * because relighting is an estimate, and somewhere it estimates badly this is
+ * the honest picture.
+ */
+function makeFlatMaterial(source, uniforms, clipPlanes) {
   const mat = new THREE.MeshBasicMaterial({
     map: source.map || null,
     color: source.color ? source.color.clone() : new THREE.Color(0xffffff),
@@ -91,79 +241,40 @@ function makeRelitMaterial(source, uniforms, clipPlanes) {
 
     shader.vertexShader = shader.vertexShader
       .replace('void main() {', 'varying vec3 vNrmW;\nvoid main() {')
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         vNrmW = normalize(mat3(modelMatrix) * normal);`
-      );
+      .replace('#include <begin_vertex>', VERTEX_NORMAL_PATCH);
 
     shader.fragmentShader = shader.fragmentShader
-      .replace(
-        'void main() {',
-        `
-        varying vec3 vNrmW;
-        uniform float uNight;
-        uniform float uWet;
-        uniform float uSnowCover;
-        uniform float uCloudCover;
-        uniform float uExposure;
-        uniform float uFlash;
-        uniform vec3  uSunColor;
-        uniform vec3  uSunDir;
-
-        ${NOISE}
-
-        vec3 saturate3(vec3 c, float amount) {
-          float l = luma(c);
-          return mix(vec3(l), c, amount);
-        }
-
-        void main() {`
-      )
+      .replace('void main() {', `${RELIGHT_PARS}\nvoid main() {`)
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
         {
-          // Runs after both the texture and any vertex colours are in, so the
-          // luminance keys below see the real surface, not a white base.
           vec3 c = diffuseColor.rgb;
-
-          // Sun colour: the capture was midday; tint towards the current sun.
           float sunUp = smoothstep(-0.10, 0.15, uSunDir.y);
           vec3 dayTint = mix(vec3(0.80, 0.84, 0.95), uSunColor, sunUp * (1.0 - uCloudCover * 0.6));
           c *= mix(vec3(1.0), dayTint, 0.45);
-
-          // Overcast flattens the baked shadows and cools everything.
           c = mix(c, saturate3(c, 0.72) * 0.80, uCloudCover * 0.55);
 
-          // Rain darkens and saturates; ground more than walls.
           float upFacing = smoothstep(0.35, 0.90, vNrmW.y);
-          float wetWeight = uWet * mix(0.55, 1.0, upFacing);
-          c = mix(c, saturate3(c, 1.25) * 0.60, wetWeight * 0.7);
+          c = mix(c, saturate3(c, 1.25) * 0.60, uWet * mix(0.55, 1.0, upFacing) * 0.7);
 
-          // Night: crush the daylight capture, keep a little warm glow in the
-          // brightest pixels so streets and shopfronts do not go dead.
           float l = luma(diffuseColor.rgb);
           vec3 nightBase = saturate3(c, 0.45) * vec3(0.17, 0.20, 0.31);
-          float lampMask = smoothstep(0.60, 0.95, l) * (1.0 - upFacing * 0.6);
-          nightBase += vec3(1.0, 0.78, 0.45) * lampMask * 0.55;
+          nightBase += vec3(1.0, 0.78, 0.45) * smoothstep(0.60, 0.95, l) * (1.0 - upFacing * 0.6) * 0.55;
           c = mix(c, nightBase, uNight);
 
-          // Snow settles on whatever faces up.
           if (uSnowCover > 0.001) {
-            float grain = 0.86 + 0.14 * valueNoise(vNrmW.xz * 40.0 + gl_FragCoord.xy * 0.05);
             vec3 snowCol = mix(vec3(0.88, 0.91, 0.96), uSunColor * 1.05, sunUp * 0.35);
             snowCol = mix(snowCol, snowCol * vec3(0.30, 0.34, 0.48), uNight);
-            c = mix(c, snowCol * grain, uSnowCover * smoothstep(0.45, 0.90, vNrmW.y));
+            c = mix(c, snowCol, uSnowCover * upFacing);
           }
 
           c += vec3(0.85, 0.88, 1.0) * uFlash * 0.5;
-          c *= uExposure;
-          diffuseColor.rgb = c;
+          diffuseColor.rgb = c * uExposure;
         }`
       );
   };
-  mat.customProgramCacheKey = () => 'photoreal-relit-v1';
+  mat.customProgramCacheKey = () => 'photoreal-flat-v1';
   return mat;
 }
 
@@ -195,7 +306,13 @@ export class Photoreal {
       uFlash: shared.uFlash,
       uSunColor: shared.uSunColor,
       uSunDir: shared.uSunDir,
+      uCaptureSun: { value: new THREE.Vector3(0, 1, 0) },
+      uDelight: { value: 1 },
     };
+
+    // 'lit' rebuilds the lighting from scratch; 'flat' keeps Google's.
+    this.lighting = 'lit';
+    this.castShadows = true;
 
     this.tiles = null;
     this.materials = new Set();
@@ -227,6 +344,7 @@ export class Photoreal {
   load(lat, lon, key, radiusM, camera, renderer) {
     this.dispose();
     this.radiusM = radiusM;
+    this.uniforms.uCaptureSun.value.copy(captureSunDirection(lat));
     this.status = 'loading';
     this.error = null;
     this.groundSettled = 0;
@@ -296,12 +414,37 @@ export class Photoreal {
       if (!obj.isMesh) return;
       if (!obj.geometry.attributes.normal) obj.geometry.computeVertexNormals();
       const old = obj.material;
-      const mat = makeRelitMaterial(old, this.uniforms, this.clipPlanes);
-      obj.material = mat;
-      this.materials.add(mat);
-      // The map is shared; do not dispose it with the old material.
+      const make = this.lighting === 'lit' ? makeLitMaterial : makeFlatMaterial;
+      obj.material = make(old, this.uniforms, this.clipPlanes);
+      obj.castShadow = obj.receiveShadow = this.lighting === 'lit' && this.castShadows;
+      this.materials.add(obj.material);
+      // The map is shared with the source material; keep it alive.
       old.map = null;
       old.dispose();
+    });
+  }
+
+  /**
+   * Switch between rebuilt lighting and the captured imagery. Tiles already on
+   * screen are re-materialised in place, so nothing has to be downloaded again.
+   * @param {'lit'|'flat'} lighting
+   */
+  setLighting(lighting) {
+    if (lighting === this.lighting) return;
+    this.lighting = lighting;
+    if (!this.tiles) return;
+    for (const mat of this.materials) mat.dispose();
+    this.materials.clear();
+    this.tiles.forEachLoadedModel((scene) => this._restyle(scene));
+  }
+
+  setCastShadows(on) {
+    this.castShadows = on;
+    if (!this.tiles) return;
+    this.tiles.forEachLoadedModel((scene) => {
+      scene.traverse((obj) => {
+        if (obj.isMesh) obj.castShadow = obj.receiveShadow = this.lighting === 'lit' && on;
+      });
     });
   }
 
