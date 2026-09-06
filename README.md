@@ -217,14 +217,20 @@ windows after dark, more of them on ground floors — and street lamps are space
 along the real road centrelines, so a night cube shows the shape of the actual
 neighbourhood.
 
-## What is not built yet
+## Where this is going
 
-[`docs/reconstruction-brief.md`](docs/reconstruction-brief.md) specifies a
-fourth mode, in which the buildings are generated from data rather than
-streamed as a mesh: OpenStreetMap gives exact footprints, Google's
-photogrammetry is raycast to measure real heights and roof forms, and clean
-parametric geometry is built from the measurements. Photogrammetry as an
+The modes are being replaced by a single one, in which the buildings are
+generated from data rather than streamed as a mesh. Photogrammetry as an
 instrument rather than as a picture.
+
+- [`docs/reconstruction-brief.md`](docs/reconstruction-brief.md) — the design
+- [`docs/next-step.md`](docs/next-step.md) — the state of play and what to
+  build next, including the further Google APIs that each remove a guess
+
+**Stage one is built.** `src/measure.js` reads real building heights and roof
+forms off Google's mesh by raycasting inside OpenStreetMap footprints. The
+offline test asserts it against a fixture of boxes with known heights, and it
+lands exactly: 48 m, 18 m and 22 m.
 
 ## Data sources
 
