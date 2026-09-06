@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { NOMINATIM, OPEN_METEO, OVERPASS } from './fixtures.mjs';
 import { panelSVG, METADATA } from './svfixture.mjs';
 
+const TILES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tiles');
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.resolve(process.argv[2] || path.join(root, 'shots'));
 fs.mkdirSync(outDir, { recursive: true });
@@ -49,6 +51,8 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, dev
 const problems = [];
 page.on('console', (m) => {
   const t = m.text();
+  // SwiftShader's ReadPixels stall warning is the screenshotting itself, not the page.
+  if (/GPU stall due to ReadPixels/.test(t)) return;
   if (m.type() === 'error' || /THREE\.\w+:|WebGL|shader/i.test(t)) problems.push(`[${m.type()}] ${t}`);
 });
 page.on('pageerror', (e) => problems.push(`[pageerror] ${e.message}`));
@@ -57,6 +61,29 @@ const json = (body) => ({ status: 200, contentType: 'application/json', body: JS
 await page.route(/nominatim/, (r) => r.fulfill(json(NOMINATIM)));
 await page.route(/open-meteo/, (r) => r.fulfill(json(OPEN_METEO)));
 await page.route(/overpass/, (r) => r.fulfill(json(OVERPASS)));
+// Stand-in Google 3D Tiles: a synthetic block placed on Earth at the fixture
+// point, served for the root tileset and its single glb.
+await page.route(/tile\.googleapis\.com/, (route) => {
+  const url = new URL(route.request().url());
+  if (url.pathname.endsWith('root.json')) {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': '*' },
+      body: fs.readFileSync(path.join(TILES_DIR, 'root.json')),
+    });
+  }
+  if (url.pathname.endsWith('.glb')) {
+    return route.fulfill({
+      status: 200,
+      contentType: 'model/gltf-binary',
+      headers: { 'access-control-allow-origin': '*' },
+      body: fs.readFileSync(path.join(TILES_DIR, 'block.glb')),
+    });
+  }
+  return route.fulfill({ status: 404, body: 'not in fixture' });
+});
+
 // Stand-in Street View: metadata plus one labelled panel per face.
 await page.route(/maps\.googleapis\.com/, (route) => {
   const url = new URL(route.request().url());
@@ -205,6 +232,54 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(400);
 await page.screenshot({ path: path.join(outDir, 'sv-outside.png') });
+
+/* ---- Photoreal 3D mode: the tiles fixture placed, scaled and settled ---- */
+await page.evaluate((h) => {
+  const slider = document.getElementById('time-slider');
+  slider.value = String(h);
+  slider.dispatchEvent(new Event('input'));
+  const sel = document.getElementById('override');
+  sel.value = 'clear';
+  sel.dispatchEvent(new Event('change'));
+}, DAY);
+await page.click('#seg-photoreal');
+try {
+  await page.waitForFunction(
+    () => window.__cube.state.mode === 'photoreal' && window.__cube.photoreal.groundSettled > 0,
+    null,
+    { timeout: 25000 }
+  );
+} catch {
+  problems.push('[photoreal] tiles never settled: status=' + (await page.evaluate(() => window.__cube.photoreal.status + ' ' + (window.__cube.photoreal.error || '') + ' settled=' + window.__cube.photoreal.groundSettled)));
+}
+await page.evaluate(() => {
+  const { camera, controls } = window.__cube;
+  document.getElementById('btn-close').click();
+  controls.target.set(0, -0.02, 0);
+  camera.position.set(4.05, 3.15, 4.65);
+  controls.update();
+});
+await page.waitForTimeout(700);
+await page.screenshot({ path: path.join(outDir, 'tiles-day.png') });
+await page.evaluate((h) => {
+  const slider = document.getElementById('time-slider');
+  slider.value = String(h);
+  slider.dispatchEvent(new Event('input'));
+  const sel = document.getElementById('override');
+  sel.value = 'rain';
+  sel.dispatchEvent(new Event('change'));
+}, NIGHT);
+await page.waitForTimeout(600);
+await page.screenshot({ path: path.join(outDir, 'tiles-night-rain.png') });
+const tilesInfo = await page.evaluate(() => ({
+  status: window.__cube.photoreal.status,
+  settled: window.__cube.photoreal.groundSettled,
+  groundOffset: window.__cube.photoreal.groundOffset,
+  materials: window.__cube.photoreal.materials.size,
+  credit: window.__cube.photoreal.attributions(),
+}));
+console.log('photoreal:', tilesInfo);
+process.stdout.write('rendered tiles-day, tiles-night-rain\n');
 
 /* ---- README preview: the model cube at night in the rain, no chrome ---- */
 await page.evaluate(() => {

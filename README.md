@@ -22,16 +22,20 @@ Three layers, stacked and sectioned so you can see into all of them at once:
 
 The buildings stand on top of the ground block, in the air.
 
-The cube can be filled two ways:
-
-**Street View** — four Google Street View walls at north, east, south and west
-plus the road surface underfoot, taken from the panorama nearest the address.
-This is the mode where you recognise your own front door. Needs a Google Maps
-Platform key.
+The cube can be filled three ways:
 
 **3D block model** — the actual building footprints around the address,
 extruded from OpenStreetMap, with the real street network, courtyards, parks
 and street trees. Needs no key at all, so it is what loads by default.
+
+**Photoreal 3D** — Google's Photorealistic 3D Tiles: the photogrammetry mesh
+of the block, true shapes, true heights, true façades, cut to the cube and
+relit for the weather. This is the one where you recognise your own roof.
+Needs a Google Maps Platform key with the Map Tiles API enabled.
+
+**Street View** — four Google Street View walls at north, east, south and west
+plus the road surface underfoot, from the panorama nearest the address. Needs
+the same key with the Street View Static API enabled.
 
 Either way the weather is the same simulation: real conditions from Open-Meteo,
 a sun and moon placed by astronomical position for that latitude, longitude and
@@ -77,16 +81,26 @@ live.
 
 ## The Google Maps Platform key
 
-Street View imagery needs a browser key with the **Street View Static API**
-enabled, on a project with billing set up. The key is kept in `localStorage`
-in your browser and sent only to Google.
+One browser key, on a project with billing set up, with:
 
-Each cube costs **five image requests** (four walls plus the ground) and one
-metadata request, which Google does not bill. Restrict the key by HTTP
-referrer before you put it anywhere public.
+- **Map Tiles API** enabled, for Photoreal 3D
+- **Street View Static API** enabled, for the photo walls
 
-If Street View has no coverage within 80 m of the address, the app says so and
-stays on the block model.
+The key is kept in `localStorage` in your browser and sent only to Google.
+Restrict it by HTTP referrer before you put it anywhere public.
+
+**Costs.** Street View is five image requests per cube plus one free metadata
+request. 3D Tiles are billed per root-tile session; the loader restricts
+itself to a sphere around the address so a cube pulls in far less than a map
+view would. Both sit comfortably inside Google's monthly credit for personal
+use.
+
+**Terms.** While Google's tiles are on screen the footer shows Google's name
+and the copyright strings the tiles carry, as their terms require. Nothing is
+cached or pre-rendered.
+
+If Street View has no coverage within 80 m of the address, or 3D Tiles do not
+cover the area, the app says so and stays on the block model.
 
 ## URL parameters
 
@@ -96,7 +110,7 @@ stays on the block model.
 | --- | --- |
 | `lat`, `lon` | the point to model; skips geocoding |
 | `q` | label shown for that point |
-| `mode` | `model` or `photo` |
+| `mode` | `model`, `photoreal` or `photo` |
 | `sky` | a simulated condition (`clear`, `overcast`, `fog`, `rain`, `storm`, `snow`, …) |
 | `heading` | rotate which compass bearing the panorama walls sit on |
 
@@ -150,6 +164,19 @@ saturates the lower frame and rings the ground panel with ripples; night
 crushes the image and lets the brightest pixels — lamps, shopfronts, lit
 windows — glow back through; snow settles on the upward-facing half.
 
+**Photoreal 3D** (`src/tiles3d.js`) streams Google's tiles through
+`3d-tiles-renderer`, re-oriented so the address sits at the origin with north
+along -Z, scaled so 75 m fills the cube, and masked to a sphere around the
+address so only the block's tiles load. Google tiles do not know where the
+ground is relative to the ellipsoid, so the loader drops a grid of rays after
+each tile arrives, takes the lowest street-level hit, and lifts the whole
+mesh onto the ground slab — re-settling as finer tiles come in and locking
+once it stops moving. The photogrammetry is a photograph wrapped around
+geometry, so weather is a grade on it, as with the Street View walls:
+overcast flattens the baked shadows, rain darkens and glosses upward faces,
+night crushes the capture and lets its brightest pixels glow, snow settles
+by surface normal.
+
 **The block model** (`src/modelcity.js`) extrudes each footprint using
 `height`, or `building:levels × 3.2 m`, or a 15 m guess for European blocks.
 Heights are exaggerated 2× because a true-to-scale 150 m box of air is mostly
@@ -182,8 +209,12 @@ Serves the site, stubs every third-party call with fixtures, and renders a
 sweep of weather states to `shots/` — clear, overcast, rain, storm, snow, fog,
 night, dusk — plus one view of each Street View wall from inside the cube,
 which is how the panorama orientation is checked (facing north, east must be on
-the right). It also regenerates the README preview. It fails on any console
-error.
+the right), and a synthetic 3D Tiles tileset placed on Earth at the fixture
+point, which checks the tiles land in the cube, on the ground, the right way
+round (its red tower is east, its green slab north). It also regenerates the
+README preview. It fails on any console error.
+
+`tools/make-tiles-fixture.py` regenerates that tileset.
 
 Fixtures are synthetic and are labelled as such; they are not real data for any
 real address.
@@ -210,7 +241,9 @@ src/
   modelcity.js      OpenStreetMap footprints -> extruded block
   weatherfx.js      rain, snow, drift, ground fog, lightning
   panorama.js       Street View panel loading
+  tiles3d.js        Google Photorealistic 3D Tiles, placed and relit
   overrides.js      the named simulated conditions
 tools/              offline smoke test and its fixtures
-vendor/three/       pinned three.js r169
+vendor/three/       pinned three.js r169, plus the glTF and Draco loaders
+vendor/3d-tiles-renderer/  pinned 3d-tiles-renderer 0.5.2
 ```

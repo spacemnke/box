@@ -16,6 +16,7 @@ import { AtmosphereSlab, GroundSlab, GROUND_TOP, SKY_BOTTOM } from './slabs.js';
 import { WeatherFX } from './weatherfx.js';
 import { ModelCity } from './modelcity.js';
 import { loadStreetViewCube } from './panorama.js';
+import { Photoreal } from './tiles3d.js';
 import { OVERRIDES } from './overrides.js';
 
 // The modelled square is 150 m across. Heights get a gentle exaggeration:
@@ -67,6 +68,7 @@ const dom = {
   placeCoords: el('place-coords'),
   segPhoto: el('seg-photo'),
   segModel: el('seg-model'),
+  segPhotoreal: el('seg-photoreal'),
   modeHint: el('mode-hint'),
   override: el('override'),
   keyToggle: el('key-toggle'),
@@ -160,6 +162,21 @@ cubeGroup.add(city.group);
 const fx = new WeatherFX(shared, city.clipPlanes);
 cubeGroup.add(fx.group);
 
+const photoreal = new Photoreal(shared, city.clipPlanes);
+cubeGroup.add(photoreal.group);
+photoreal.onStatus = (what) => {
+  if (what === 'error') {
+    setStatus(photoreal.error, 'error');
+    if (state.mode === 'photoreal') setMode('model');
+  } else if (what === 'streaming') {
+    setStatus('Streaming Google 3D Tiles…', 'ok');
+  } else if (what === 'ground') {
+    // The tiles are not height-exaggerated, so one cube unit is MODEL_RADIUS_M metres.
+    const metres = -photoreal.groundOffset * MODEL_RADIUS_M;
+    setStatus(`Photorealistic 3D Tiles · street level ${metres >= 0 ? '+' : ''}${metres.toFixed(0)} m above the ellipsoid`, 'ok');
+  }
+};
+
 const glass = createGlass(shared);
 const edges = createEdges();
 cubeGroup.add(glass, edges);
@@ -200,6 +217,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  photoreal.onResize(camera, renderer);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -209,6 +227,7 @@ resize();
 /* ------------------------------------------------------------------ */
 
 const clock = new THREE.Clock();
+let lastCreditTick = -1;
 
 function frame() {
   requestAnimationFrame(frame);
@@ -221,6 +240,15 @@ function frame() {
   const flash = fx.update(dt, t);
   shared.uFlash.value = flash;
   sky.update(t);
+  if (state.mode === 'photoreal') {
+    photoreal.update();
+    // Google's terms: their attribution stays on screen while tiles show.
+    if ((t | 0) !== lastCreditTick) {
+      lastCreditTick = t | 0;
+      const credit = photoreal.attributions();
+      dom.svCredit.textContent = credit ? `Google · ${credit}` : 'Google';
+    }
+  }
 
   if (state.climate) {
     // Lightning briefly overrides the sun for the model geometry too.
@@ -261,6 +289,7 @@ function applyClimate(climate) {
   city.applyClimate(climate);
   sky.applyClimate(climate);
   groundSlab.applyClimate(climate);
+  photoreal.applyClimate(climate);
   // The lid moves with the cloud cover, so the weather's headroom moves too.
   fx.setBand(GROUND_TOP, sky.bottomY);
 
@@ -495,11 +524,16 @@ async function buildForPlace(place, { preferMode } = {}) {
     setStatus(`OpenStreetMap geometry unavailable: ${err.message}`, 'error');
   }
 
+  const wantPhotoreal = (preferMode || state.mode) === 'photoreal';
+  photoreal.dispose();
+
   if (wantPhoto && key) {
     await loadPhotos(place, key);
-  } else if (wantPhoto && !key) {
+  } else if (wantPhotoreal && key) {
+    await loadPhotoreal(place, key);
+  } else if ((wantPhoto || wantPhotoreal) && !key) {
     setMode('model');
-    setStatus('Add a Google Maps Platform key to fill the cube with Street View.', 'error');
+    setStatus('Add a Google Maps Platform key for Street View or Photoreal 3D.', 'error');
     openKeyPanel();
   } else {
     setMode(state.mode);
@@ -554,27 +588,40 @@ function haversine(lat1, lon1, lat2, lon2) {
 /* Modes                                                               */
 /* ------------------------------------------------------------------ */
 
+const MODE_HINTS = {
+  model: 'The block model is extruded from OpenStreetMap footprints and needs no key.',
+  photoreal: 'Google\u2019s photogrammetry of the block — real shapes, heights and façades — cut to the cube and relit for the weather.',
+  photo: 'Four Street View walls and the road surface, relit for the current weather, capped by simulated cloud.',
+};
+
 function setMode(mode) {
   if (mode === 'photo' && !state.photoReady) mode = 'model';
+  if (mode === 'photoreal' && !photoreal.tiles) mode = 'model';
   state.mode = mode;
 
-  shell.setMode(mode);
+  // Sky walls for anything three-dimensional; photo panels for the photo box.
+  shell.setMode(mode === 'photo' ? 'photo' : 'sky');
   city.group.visible = mode === 'model';
-  // A photographed street already contains its own ground; the cut slab is
-  // only right under the extruded model.
-  groundSlab.group.visible = mode === 'model';
+  photoreal.group.visible = mode === 'photoreal';
+  // A photographed street already contains its own ground; the cut slab sits
+  // under anything with real geometry on it.
+  groundSlab.group.visible = mode !== 'photo';
 
-  dom.segPhoto.classList.toggle('is-active', mode === 'photo');
-  dom.segModel.classList.toggle('is-active', mode === 'model');
-  dom.segPhoto.setAttribute('aria-checked', String(mode === 'photo'));
-  dom.segModel.setAttribute('aria-checked', String(mode === 'model'));
-
-  dom.modeHint.textContent =
-    mode === 'photo'
-      ? 'Four Street View walls and the road surface, relit for the current weather, capped by simulated cloud.'
-      : 'The block model is extruded from OpenStreetMap footprints and needs no key.';
-
+  for (const [key, btn] of [['photo', dom.segPhoto], ['model', dom.segModel], ['photoreal', dom.segPhotoreal]]) {
+    btn.classList.toggle('is-active', mode === key);
+    btn.setAttribute('aria-checked', String(mode === key));
+  }
+  dom.modeHint.textContent = MODE_HINTS[mode];
   controls.minDistance = mode === 'photo' ? 0.05 : 0.35;
+}
+
+async function loadPhotoreal(place, key) {
+  showLoader('Google 3D Tiles', 0.6);
+  photoreal.load(place.lat, place.lon, key, MODEL_RADIUS_M, camera, renderer);
+  // Give the root request a moment so a bad key fails here rather than later.
+  await new Promise((r) => setTimeout(r, 900));
+  hideLoader();
+  if (photoreal.status !== 'error') setMode('photoreal');
 }
 
 function openKeyPanel() {
@@ -689,6 +736,19 @@ dom.segPhoto.addEventListener('click', async () => {
 
 dom.segModel.addEventListener('click', () => setMode('model'));
 
+dom.segPhotoreal.addEventListener('click', async () => {
+  const key = dom.apiKey.value.trim();
+  if (!state.place) return setStatus('Build a cube first.', 'error');
+  if (!key) {
+    setStatus('Photoreal 3D needs a Google Maps Platform key with the Map Tiles API enabled.', 'error');
+    return openKeyPanel();
+  }
+  if (photoreal.tiles) return setMode('photoreal');
+  await loadPhotoreal(state.place, key);
+  refreshClimate();
+  writeURL();
+});
+
 dom.keyToggle.addEventListener('click', () => {
   const open = dom.keyBody.hidden;
   dom.keyBody.hidden = !open;
@@ -799,7 +859,7 @@ setInterval(async () => {
     state.override = params.get('sky');
     dom.override.value = state.override;
   }
-  const mode = params.get('mode') === 'photo' ? 'photo' : 'model';
+  const mode = ['photo', 'photoreal'].includes(params.get('mode')) ? params.get('mode') : 'model';
 
   // Nothing has loaded yet — give the cube a plausible sky so it is never blank.
   applyClimate(
@@ -824,7 +884,7 @@ setInterval(async () => {
 /* Exposed for debugging and for the smoke test. */
 window.__cube = {
   state, scene, camera, controls, renderer,
-  shell, city, fx, glass, sky, groundSlab,
+  shell, city, fx, glass, sky, groundSlab, photoreal,
   applyClimate, buildClimate, setMode,
   layout: { GROUND_TOP, SKY_BOTTOM },
 };
