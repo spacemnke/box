@@ -165,6 +165,19 @@ for (const scene of SCENES) {
   process.stdout.write(`rendered ${scene.name}\n`);
 }
 
+// The default view: steep, looking down into the block through the thinned lid.
+await page.evaluate(() => {
+  const { camera, controls } = window.__cube;
+  controls.target.set(0, -0.02, 0);
+  camera.position.set(3.1, 5.3, 3.55);
+  controls.update();
+  const sel = document.getElementById('override');
+  sel.value = 'overcast';
+  sel.dispatchEvent(new Event('change'));
+});
+await page.waitForTimeout(700);
+await page.screenshot({ path: path.join(outDir, '12-overhead.png') });
+
 // A close-in view from inside the cube, which is how the photo mode is used.
 await page.evaluate(() => {
   const { camera, controls } = window.__cube;

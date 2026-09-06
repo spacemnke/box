@@ -48,6 +48,7 @@ const SKY_SLAB_FRAG = /* glsl */ `
 
   uniform float uTopY;
   uniform float uBottomY;
+  uniform float uLidAlpha;   // 1 from the side; thins out when seen from above
 
   ${NOISE}
   ${SKY_UNIFORMS}
@@ -104,7 +105,7 @@ const SKY_SLAB_FRAG = /* glsl */ `
     col += vec3(0.85, 0.88, 1.0) * uFlash * 0.9;
 
     col *= uExposure;
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col, uLidAlpha);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -207,13 +208,14 @@ const GROUND_SLAB_FRAG = /* glsl */ `
 
 /* ------------------------------------------------------------------ */
 
-function slabMesh(fragmentShader, shared, extraUniforms, height, centreY) {
+function slabMesh(fragmentShader, shared, extraUniforms, height, centreY, options = {}) {
   const geo = new THREE.BoxGeometry(CUBE_SIZE * 0.998, height, CUBE_SIZE * 0.998);
   const mat = new THREE.ShaderMaterial({
     vertexShader: SLAB_VERT,
     fragmentShader,
     uniforms: { ...shared, ...extraUniforms },
     side: THREE.FrontSide,
+    ...options,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.y = centreY;
@@ -239,16 +241,21 @@ export class AtmosphereSlab {
     this.uniforms = {
       uTopY: { value: this.topY },
       uBottomY: { value: this.bottomY },
+      uLidAlpha: { value: 1 },
     };
 
+    // Transparent so it can thin out when looked at from above; it draws
+    // after the opaque block and before the rain, which then falls through it.
     this.slab = slabMesh(
       SKY_SLAB_FRAG,
       shared,
       this.uniforms,
       this.nominal,
-      (this.topY + this.bottomY) / 2
+      (this.topY + this.bottomY) / 2,
+      { transparent: true, depthWrite: false }
     );
     this.slab.renderOrder = 2;
+    this.viewAlpha = 1;
     this.group.add(this.slab);
 
     this.puffs = this._buildPuffs();
@@ -301,6 +308,7 @@ export class AtmosphereSlab {
       sprite.renderOrder = 3;
       sprite.userData = {
         seed: Math.random(),
+        opacity: 0,
         drop: Math.random() * 0.20,
         baseY: sprite.position.y,
         scale,
@@ -309,6 +317,20 @@ export class AtmosphereSlab {
       this.puffList.push(sprite);
     }
     return group;
+  }
+
+  /**
+   * From the side the lid is a solid ceiling; from above it would hide the
+   * whole block, so it thins to a veil as the camera climbs.
+   * @param {number} elevation camera elevation above the cube centre, radians
+   */
+  setViewElevation(elevation) {
+    const t = THREE.MathUtils.smoothstep(elevation, 0.42, 1.05); // 24° .. 60°
+    this.viewAlpha = 1 - t * 0.86;
+    this.uniforms.uLidAlpha.value = this.viewAlpha;
+    for (const puff of this.puffList) {
+      puff.material.opacity = puff.userData.opacity * (0.3 + 0.7 * this.viewAlpha);
+    }
   }
 
   applyClimate(climate) {
@@ -332,9 +354,10 @@ export class AtmosphereSlab {
 
     for (const puff of this.puffList) {
       const s = puff.userData.seed;
-      puff.material.opacity = Math.max(0, cover * 1.05 - s * 0.30) * (0.5 + climate.cloudDark * 0.5);
+      puff.userData.opacity = Math.max(0, cover * 1.05 - s * 0.30) * (0.5 + climate.cloudDark * 0.5);
+      puff.material.opacity = puff.userData.opacity * (0.3 + 0.7 * this.viewAlpha);
       puff.material.color.copy(shade).multiplyScalar(0.55 + s * 0.5);
-      puff.visible = puff.material.opacity > 0.01;
+      puff.visible = puff.userData.opacity > 0.01;
     }
   }
 
