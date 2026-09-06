@@ -40,7 +40,24 @@ export async function geocode(query) {
     lon: parseFloat(r.lon),
     type: r.type,
     address: r.address || {},
+    // Whether the match was the building itself or only the street, which is
+    // the difference between "your door" and "somewhere along your road".
+    precision: geocodePrecision(r),
   }));
+}
+
+/**
+ * How exactly a geocode landed. Nominatim returns a house number only when it
+ * actually matched one; otherwise the point is the centre of the street, which
+ * can be tens of metres from the door.
+ * @returns {'house'|'street'|'area'}
+ */
+function geocodePrecision(row) {
+  const a = row.address || {};
+  if (a.house_number) return 'house';
+  if (row.type === 'house' || row.type === 'building' || row.category === 'building') return 'house';
+  if (a.road) return 'street';
+  return 'area';
 }
 
 /** Coordinates -> a human readable address. */
@@ -60,6 +77,7 @@ export async function reverseGeocode(lat, lon) {
     lat: parseFloat(r.lat),
     lon: parseFloat(r.lon),
     address: r.address || {},
+    precision: geocodePrecision(r),
   };
 }
 

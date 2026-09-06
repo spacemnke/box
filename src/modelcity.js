@@ -269,9 +269,6 @@ export class ModelCity {
     // ---- trees -------------------------------------------------------------
     this._addTrees(osm.trees, project, scale, vScale);
 
-    // ---- the address marker -------------------------------------------------
-    this.group.add(this._marker(scale, vScale));
-
     return this.stats;
   }
 
