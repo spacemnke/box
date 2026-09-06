@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Weather Cube — a place and its sky, contained</title>
+<meta name="description" content="Any address, cut into a cube: its buildings, the ground beneath them and the weather happening over them right now." />
+<link rel="stylesheet" href="./styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌦️</text></svg>" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Top bar                                                             -->
+<!-- ------------------------------------------------------------------ -->
+<header class="topbar">
+  <div class="mark">
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <path d="M12 2.6 21 7.4v9.2L12 21.4 3 16.6V7.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M3 7.4 12 12l9-4.6M12 12v9.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+    </svg>
+    <span>weather cube</span>
+  </div>
+  <p class="strap">A real place. Its real sky. Held still.</p>
+  <button type="button" class="pill" id="btn-panel" aria-expanded="false" aria-controls="drawer">
+    <span class="pill-dot"></span> Controls
+  </button>
+</header>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Headline                                                            -->
+<!-- ------------------------------------------------------------------ -->
+<section class="lede">
+  <span class="lede-rule" aria-hidden="true"></span>
+  <h1>
+    <span id="lede-condition">Clear sky.</span>
+    <span id="lede-place">Valencia.</span>
+  </h1>
+  <p class="lede-sub" id="lede-sub">Reading the sky&hellip;</p>
+  <button type="button" class="ghost" id="btn-change">Change location</button>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Readout                                                             -->
+<!-- ------------------------------------------------------------------ -->
+<aside class="readout" id="readout">
+  <div class="readout-head" id="wx-cond-label">Clear sky</div>
+
+  <div class="dial">
+    <svg viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="dial-track" cx="60" cy="60" r="52" />
+      <circle class="dial-arc" cx="60" cy="60" r="52" id="dial-arc" />
+    </svg>
+    <div class="dial-value"><span id="wx-temp">—</span><i>°</i></div>
+    <div class="dial-caption" id="wx-feels">—</div>
+  </div>
+
+  <dl class="rows">
+    <div class="row"><dt>Wind</dt><dd id="wx-wind">—</dd></div>
+    <div class="row"><dt>Cloud</dt><dd id="wx-cloud">—</dd></div>
+    <div class="row"><dt>Humidity</dt><dd id="wx-hum">—</dd></div>
+    <div class="row"><dt>Precip</dt><dd id="wx-precip">—</dd></div>
+    <div class="row"><dt>Visibility</dt><dd id="wx-vis">—</dd></div>
+  </dl>
+
+  <div class="scrub">
+    <div class="scrub-head"><span>Hour</span><button type="button" class="ghost sm" id="btn-now">now</button></div>
+    <input type="range" id="time-slider" min="-24" max="24" step="1" value="0" aria-label="Hour offset" />
+    <div class="scrub-caption" id="time-caption">Live conditions</div>
+  </div>
+</aside>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Bottom strip                                                        -->
+<!-- ------------------------------------------------------------------ -->
+<div class="strip">
+  <div class="strip-item"><span class="k">Local time</span><span class="v" id="wx-time">—</span></div>
+  <div class="strip-item"><span class="k">Sun</span><span class="v" id="wx-sun">—</span></div>
+  <div class="strip-item"><span class="k">Gust</span><span class="v" id="wx-gust">—</span></div>
+  <div class="strip-item"><span class="k">Pressure</span><span class="v" id="wx-press">—</span></div>
+</div>
+
+<footer class="credits">
+  <span id="credit-status">—</span>
+  <span class="credit-sep">·</span>
+  Weather <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>
+  <span class="credit-sep">·</span>
+  Geometry © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+  <span class="credit-sep">·</span>
+  <span id="sv-credit">Google Street View</span>
+</footer>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Controls drawer                                                     -->
+<!-- ------------------------------------------------------------------ -->
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-head">
+    <h2>Controls</h2>
+    <button type="button" class="icon" id="btn-close" aria-label="Close controls">✕</button>
+  </div>
+
+  <form class="block" id="search-form" autocomplete="off">
+    <label class="field">
+      <span class="label">Address</span>
+      <input id="address" type="text" spellcheck="false"
+             placeholder="Calle del Mar 26, Valencia 46003, Spain"
+             value="Calle del Mar 26, Valencia 46003, Spain" />
+    </label>
+    <div class="btn-row">
+      <button type="submit" class="btn btn-primary" id="btn-search">Build cube</button>
+      <button type="button" class="btn" id="btn-locate">Use my location</button>
+    </div>
+    <ul class="results" id="results" hidden></ul>
+    <p class="note" id="place-coords"></p>
+  </form>
+
+  <div class="block">
+    <span class="label">Cube contents</span>
+    <div class="segmented" role="radiogroup" aria-label="Cube contents">
+      <button type="button" class="seg" id="seg-photo" role="radio" aria-checked="false">Street View</button>
+      <button type="button" class="seg is-active" id="seg-model" role="radio" aria-checked="true">Block model</button>
+    </div>
+    <p class="note" id="mode-hint">
+      The block model is extruded from OpenStreetMap footprints and needs no key.
+    </p>
+  </div>
+
+  <div class="block">
+    <span class="label">Simulate a different sky</span>
+    <select id="override">
+      <option value="live">Use the real forecast</option>
+      <option value="clear">Clear</option>
+      <option value="partly">Partly cloudy</option>
+      <option value="overcast">Overcast</option>
+      <option value="fog">Fog</option>
+      <option value="drizzle">Drizzle</option>
+      <option value="rain">Rain</option>
+      <option value="storm">Thunderstorm</option>
+      <option value="snow">Snow</option>
+    </select>
+  </div>
+
+  <div class="block">
+    <button type="button" class="disclosure" id="key-toggle" aria-expanded="false">
+      <span>Google Street View key</span><span class="chev">▾</span>
+    </button>
+    <div id="key-body" hidden>
+      <label class="field">
+        <span class="label">Maps Platform browser key</span>
+        <input id="api-key" type="password" placeholder="AIza…" spellcheck="false" />
+      </label>
+      <p class="note">
+        Kept in this browser only, sent only to Google. Needs the
+        <strong>Street View Static API</strong> enabled. Five image requests per cube.
+      </p>
+      <label class="check"><input type="checkbox" id="remember-key" checked /><span>Remember on this device</span></label>
+    </div>
+  </div>
+
+  <div class="block">
+    <span class="label">View</span>
+    <label class="check"><input type="checkbox" id="opt-rotate" checked /><span>Auto-rotate</span></label>
+    <label class="check"><input type="checkbox" id="opt-glass" checked /><span>Glass shell</span></label>
+    <label class="check"><input type="checkbox" id="opt-sky-replace" checked /><span>Simulate sky over photos</span></label>
+    <label class="field inline">
+      <span class="label">Detail</span>
+      <select id="opt-quality">
+        <option value="1">High</option>
+        <option value="0.6" selected>Balanced</option>
+        <option value="0.3">Light</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="btn-row">
+    <button type="button" class="btn" id="btn-shot">Save PNG</button>
+    <button type="button" class="btn" id="btn-share">Copy link</button>
+  </div>
+
+  <p class="note" id="status" role="status"></p>
+</div>
+
+<div class="loader" id="loader" hidden>
+  <div class="loader-inner">
+    <div class="loader-text" id="loader-text">Working…</div>
+    <div class="bar"><div class="bar-fill" id="loader-bar"></div></div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
