@@ -1,7 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { geocode, reverseGeocode, fetchWeather, fetchOSM, hourlyAt, localStamp } from './data.js';
+import {
+  geocode,
+  reverseGeocode,
+  fetchWeather,
+  fetchOSM,
+  hourlyAt,
+  localStamp,
+  probeStreetViewAccess,
+  ENABLE_URLS,
+} from './data.js';
 import { buildClimate } from './climate.js';
 import {
   HALF,
@@ -75,6 +84,8 @@ const dom = {
   keyBody: el('key-body'),
   apiKey: el('api-key'),
   rememberKey: el('remember-key'),
+  btnTestKey: el('btn-testkey'),
+  keyReport: el('key-report'),
   optRotate: el('opt-rotate'),
   optGlass: el('opt-glass'),
   optSkyReplace: el('opt-sky-replace'),
@@ -622,6 +633,12 @@ async function loadPhotos(place, key) {
     state.photoReady = false;
     setMode('model');
     setStatus(`Street View: ${err.message}`, 'error');
+    if (/not activated|not been used|is disabled/i.test(err.message)) {
+      reportKey([
+        { what: 'Street View Static API', ok: false, why: 'Not enabled on this key\u2019s project.', href: ENABLE_URLS.streetview },
+      ]);
+      openKeyPanel();
+    }
   }
 }
 
@@ -633,6 +650,89 @@ function haversine(lat1, lon1, lat2, lon2) {
     Math.cos((lat2 - lat1) * p) / 2 +
     (Math.cos(lat1 * p) * Math.cos(lat2 * p) * (1 - Math.cos((lon2 - lon1) * p))) / 2;
   return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* ------------------------------------------------------------------ */
+/* Key diagnostics                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Render one line per API. Google's own text goes in via textContent, never
+ * as markup.
+ * @param {{what: string, ok: boolean, why?: string, href?: string}[]} rows
+ */
+function reportKey(rows) {
+  dom.keyReport.innerHTML = '';
+  for (const row of rows) {
+    const line = document.createElement('div');
+    line.className = `line${row.ok ? '' : ' bad'}`;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const what = document.createElement('span');
+    what.className = 'what';
+    what.textContent = row.what;
+    const verdict = document.createElement('span');
+    verdict.textContent = row.ok ? 'working' : 'blocked';
+    line.append(dot, what, verdict);
+    dom.keyReport.appendChild(line);
+
+    if (!row.ok && row.why) {
+      const why = document.createElement('p');
+      why.className = 'why';
+      why.textContent = row.why;
+      if (row.href) {
+        why.append(' ');
+        const a = document.createElement('a');
+        a.href = row.href;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = 'Enable it';
+        why.appendChild(a);
+      }
+      dom.keyReport.appendChild(why);
+    }
+  }
+  dom.keyReport.hidden = rows.length === 0;
+}
+
+async function testKey() {
+  const key = dom.apiKey.value.trim();
+  if (!key) {
+    setStatus('Paste a key first.', 'error');
+    return;
+  }
+  const place = state.place || { lat: 39.4739, lon: -0.3742 };
+  dom.btnTestKey.disabled = true;
+  dom.btnTestKey.textContent = 'Testing…';
+  try {
+    const [tiles, sv] = await Promise.all([
+      probeTilesAccess(key),
+      probeStreetViewAccess(key, place.lat, place.lon),
+    ]);
+    reportKey([
+      {
+        what: 'Map Tiles API · Photoreal 3D',
+        ok: tiles.ok,
+        why: tiles.ok ? '' : `${tiles.message}${tiles.detail ? ` ${tiles.detail}` : ''}`,
+        href: ENABLE_URLS.tiles,
+      },
+      {
+        what: 'Street View Static API',
+        ok: sv.ok,
+        why: sv.ok ? '' : `${sv.message}${sv.detail ? ` ${sv.detail}` : ''}`,
+        href: ENABLE_URLS.streetview,
+      },
+    ]);
+    setStatus(
+      tiles.ok && sv.ok
+        ? 'Both APIs are working on this key.'
+        : 'See which API is blocked, above.',
+      tiles.ok && sv.ok ? 'ok' : 'error'
+    );
+  } finally {
+    dom.btnTestKey.disabled = false;
+    dom.btnTestKey.textContent = 'Test key';
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -671,7 +771,16 @@ async function loadPhotoreal(place, key) {
   const probe = await probeTilesAccess(key);
   if (!probe.ok) {
     hideLoader();
-    setStatus(probe.detail ? `${probe.message} (${probe.detail})` : probe.message, 'error');
+    setStatus(probe.message, 'error');
+    reportKey([
+      {
+        what: 'Map Tiles API · Photoreal 3D',
+        ok: false,
+        why: `${probe.message}${probe.detail ? ` ${probe.detail}` : ''}`,
+        href: ENABLE_URLS.tiles,
+      },
+    ]);
+    openKeyPanel();
     setMode('model');
     return;
   }
@@ -834,6 +943,7 @@ dom.apiKey.addEventListener('change', () => {
     } catch { /* private browsing */ }
   }
 });
+dom.btnTestKey.addEventListener('click', testKey);
 dom.rememberKey.addEventListener('change', () => {
   if (!dom.rememberKey.checked) {
     try { localStorage.removeItem('weathercube.key'); } catch { /* ignore */ }

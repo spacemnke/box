@@ -267,8 +267,8 @@ export async function streetViewMetadata(lat, lon, key, radius = 60) {
   if (meta.status !== 'OK') {
     const err = new Error(
       meta.status === 'ZERO_RESULTS'
-        ? `No Street View imagery within ${radius} m of that point.`
-        : `Street View: ${meta.status}${meta.error_message ? ` — ${meta.error_message}` : ''}`
+        ? `no imagery within ${radius} m of that point`
+        : `${meta.status}${meta.error_message ? ` — ${meta.error_message}` : ''}`
     );
     err.status = meta.status;
     throw err;
@@ -281,6 +281,50 @@ export async function streetViewMetadata(lat, lon, key, radius = 60) {
     copyright: meta.copyright,
   };
 }
+
+/**
+ * Is this key allowed to use the Street View Static API? Metadata requests are
+ * free, so asking costs nothing.
+ * @returns {Promise<{ok: boolean, coverage?: boolean, message?: string, detail?: string}>}
+ */
+export async function probeStreetViewAccess(key, lat, lon) {
+  let json;
+  try {
+    json = await getJSON(
+      `${GOOGLE_SV}/metadata?` +
+        new URLSearchParams({ location: `${lat},${lon}`, radius: '150', key })
+    );
+  } catch {
+    return { ok: false, message: 'Could not reach maps.googleapis.com — check the network, or an ad blocker.' };
+  }
+
+  // ZERO_RESULTS means the API answered; there is simply no imagery there.
+  if (json.status === 'OK' || json.status === 'ZERO_RESULTS') {
+    return { ok: true, coverage: json.status === 'OK' };
+  }
+
+  const detail = json.error_message || '';
+  const blob = `${json.status} ${detail}`.toLowerCase();
+  let message;
+  if (blob.includes('not activated') || blob.includes('not been used') || blob.includes('is disabled')) {
+    message = 'The Street View Static API is not enabled on this key\u2019s project.';
+  } else if (blob.includes('referer') || blob.includes('referrer')) {
+    message =
+      'Google is blocking the referrer. Restrict the key to the origin with no path, ' +
+      `${location.origin}/*`;
+  } else if (blob.includes('billing')) {
+    message = 'Billing is not enabled on the key\u2019s Google Cloud project.';
+  } else {
+    message = `Google refused the Street View request (${json.status}).`;
+  }
+  return { ok: false, message, detail };
+}
+
+/** Direct links to turn each API on, which beats hunting the API library. */
+export const ENABLE_URLS = {
+  streetview: 'https://console.cloud.google.com/apis/library/street-view-image-backend.googleapis.com',
+  tiles: 'https://console.cloud.google.com/apis/library/tile.googleapis.com',
+};
 
 export function streetViewImageURL({ panoId, lat, lon, heading, pitch, size, key, fov = 90 }) {
   const params = new URLSearchParams({
