@@ -1,7 +1,12 @@
 # Build brief: reconstructed block geometry
 
-A specification for adding a fourth mode to Weather Cube, in which the
-buildings are **generated from data rather than streamed as a mesh**.
+A specification for **replacing** every display mode in Weather Cube with a
+single one, in which the buildings are generated from data rather than
+streamed as a mesh.
+
+This is not a fourth option alongside the others. When it works, Street View,
+the block-model extrusion and the photoreal tile view all stop being things a
+viewer can choose. There is one cube and it shows one thing.
 
 Written for another engineer or model picking this up cold. It assumes you have
 the repository and have read `README.md`. Everything here is concrete on
@@ -61,7 +66,7 @@ need a library, `npm pack` it and commit the build, as was done for
 
 ## 1. What to build
 
-A mode called **Reconstructed**. It produces clean, parametric, architectural
+**The** view — not a mode. It produces clean, parametric, architectural
 geometry for the block around the address: sharp corners, correct heights,
 real roof forms, storey-aligned window grids — lit by the existing PBR
 pipeline, standing on the existing ground slab, under the existing weather.
@@ -73,6 +78,23 @@ The user's words, which are the actual specification:
 > rendering but a high fidelity 3-D rendering for my exact location/block
 
 ---
+
+### 1.1 What survives, and as what
+
+The distinction that matters: two of the three existing modes are being demoted
+from *display* to *data*, not deleted.
+
+| Today | After |
+| --- | --- |
+| Photoreal tiles — a view | **The measuring instrument.** Still loaded, never drawn. Raycast for heights and roof forms, sampled for façade colour, then hidden. |
+| Block model — a view | **Footprint source, and a silent per-building fallback** when a building cannot be measured. Never selectable. |
+| Street View — a view | **Deleted**, unless you use it for eye-level façade colour, which aerial capture reads poorly. Decide, then commit. |
+| The mode switcher | **Deleted.** |
+
+The consequence, to accept deliberately rather than discover: **without a
+Google key there is nothing to measure, so there is no cube.** Say so plainly
+in the UI. Do not quietly substitute the old extrusion and let someone believe
+they are looking at a measured building.
 
 ## 2. Why the two existing modes are not that
 
@@ -380,7 +402,12 @@ screenshot for the eye.
 - Do not rebuild the lighting, the weather, the sky, the cube or the chrome.
   They work.
 - Do not add a build step or a CDN dependency.
-- Do not delete the photoreal or block modes. The point is to compare.
+- Do not keep the mode switcher alive "just in case". If the reconstruction is
+  not good enough to stand alone, that is a reason to improve it, not a reason
+  to leave an escape hatch in the interface. Ship one thing.
+- Do not silently fall back to the whole-block extrusion when measurement
+  fails wholesale. Per-building fallback is invisible and fine; a whole cube of
+  guessed boxes presented as a measured model is not.
 
 ---
 
@@ -396,7 +423,9 @@ screenshot for the eye.
 6. Under 150k triangles; measure-and-build under two seconds; no frame stalls.
 7. The fixture test asserts measured heights to within 1 m.
 8. The UI is honest about which buildings were measured and which were guessed.
-9. `npm test` passes with no console errors.
+9. Street View, the block-model view and the mode switcher are gone from the
+   interface, and the tiles are loaded but never rendered.
+10. `npm test` passes with no console errors.
 
 ---
 
@@ -411,5 +440,6 @@ What it will be: geometrically correct, crisply rendered, honestly lit, and
 recognisable as *that* block rather than a generic one. Sharp where the
 photogrammetry is melted, and truthful where the OSM extrusion is guessing.
 
-The photoreal mode keeps the photographic detail. Keeping both, and letting
-someone switch, is the design — not a compromise.
+Photographic detail is the price. It buys sharpness, honest lighting, a tenth
+of the triangles, and a model that holds together when you move in close —
+which is the trade the brief is making on purpose.

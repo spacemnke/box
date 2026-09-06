@@ -9,6 +9,7 @@ import {
   hourlyAt,
   localStamp,
   probeStreetViewAccess,
+  projector,
   ENABLE_URLS,
 } from './data.js';
 import { buildClimate } from './climate.js';
@@ -28,6 +29,7 @@ import { loadStreetViewCube } from './panorama.js';
 import { Photoreal, probeTilesAccess } from './tiles3d.js';
 import { AddressMarker } from './marker.js';
 import { SkyEnvironment } from './skyenv.js';
+import { measureBlock } from './measure.js';
 import { OVERRIDES } from './overrides.js';
 
 // The modelled square is 150 m across. Heights get a gentle exaggeration:
@@ -126,6 +128,8 @@ const state = {
   lighting: 'lit',
   headingOffset: 0,
   climate: null,
+  osm: null,
+  metrics: null,
   lastWeatherFetch: 0,
 };
 
@@ -644,6 +648,8 @@ async function buildForPlace(place, { preferMode } = {}) {
     const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M, (host) => {
       showLoader(`Cutting the ground · ${host}`, 0.45);
     });
+    // Kept for the measurement stage, which needs footprints in world XZ.
+    state.osm = osm;
     const built = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
     stats = built.buildings
       ? `${built.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`
@@ -1199,10 +1205,36 @@ setInterval(async () => {
   }
 })();
 
+/**
+ * Measure the block against the loaded photogrammetry. Footprints arrive as
+ * lat/lon and have to be projected into the same world XZ the tiles occupy.
+ */
+async function measureFromTiles(onProgress) {
+  if (!state.osm || !photoreal.tiles || !state.place) return null;
+  const project = projector(state.place.lat, state.place.lon);
+  const scale = 1 / MODEL_RADIUS_M;
+  const buildings = state.osm.buildings.map((b) => ({
+    ...b,
+    // Shapes are authored with north at -Z, matching modelcity.js.
+    ring2d: b.ring.map((pt) => {
+      const p = project(pt.lat, pt.lon);
+      return new THREE.Vector2(p.x * scale, p.z * scale);
+    }),
+  }));
+  state.metrics = await measureBlock(
+    buildings,
+    photoreal.tiles.group,
+    MODEL_RADIUS_M,
+    photoreal.streetY,
+    onProgress
+  );
+  return state.metrics;
+}
+
 /* Exposed for debugging and for the smoke test. */
 window.__cube = {
   state, scene, camera, controls, renderer,
   shell, city, fx, glass, sky, groundSlab, photoreal,
-  applyClimate, buildClimate, setMode,
+  applyClimate, buildClimate, setMode, measureFromTiles,
   layout: { GROUND_TOP, SKY_BOTTOM },
 };

@@ -8,7 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NOMINATIM, OPEN_METEO, OVERPASS } from './fixtures.mjs';
+import { NOMINATIM, OPEN_METEO, OVERPASS, KNOWN_BUILDINGS } from './fixtures.mjs';
 import { panelSVG, METADATA } from './svfixture.mjs';
 
 const TILES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tiles');
@@ -293,6 +293,41 @@ const tilesInfo = await page.evaluate(() => ({
 }));
 console.log('photoreal:', tilesInfo);
 process.stdout.write('rendered tiles-day, tiles-night-rain\n');
+
+/* ---- Measurement: heights read off the mesh, against known truth ---- */
+// The tileset fixture is built from boxes of known height, and the OSM fixture
+// carries footprints on the same rectangles. So the measuring stage can be
+// checked against truth with no network and no API key.
+const measured = await page.evaluate(async () => {
+  const rows = await window.__cube.measureFromTiles();
+  return rows
+    .filter((r) => r.name && r.name.startsWith('fixture-'))
+    .map((r) => ({
+      name: r.name,
+      eave: r.eaveHeight ? +r.eaveHeight.toFixed(2) : null,
+      ridge: r.ridgeHeight ? +r.ridgeHeight.toFixed(2) : null,
+      roof: r.roof?.kind || null,
+      samples: r.sampleCount || 0,
+      confidence: r.confidence,
+      source: r.source,
+    }));
+});
+console.log('measured:', measured);
+for (const truth of KNOWN_BUILDINGS) {
+  const got = measured.find((m) => m.name === truth.name);
+  if (!got || got.source !== 'measured') {
+    problems.push(`[measure] ${truth.name} was not measured at all`);
+    continue;
+  }
+  // Within half a metre of the box it was measuring.
+  if (Math.abs(got.eave - truth.height) > 0.5) {
+    problems.push(`[measure] ${truth.name}: ${got.eave} m, expected ${truth.height} m`);
+  }
+  // Every fixture box is flat-topped.
+  if (got.roof !== 'flat') {
+    problems.push(`[measure] ${truth.name}: roof read as ${got.roof}, expected flat`);
+  }
+}
 
 /* ---- Relighting: the sun must actually move the shadows ---- */
 // Same weather, three different hours. If lighting is genuinely rebuilt, the

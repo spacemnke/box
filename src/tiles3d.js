@@ -19,6 +19,8 @@ import { NOISE } from './glsl.js';
 
 const DEG = Math.PI / 180;
 const TILES_ROOT = 'https://tile.googleapis.com/v1/3dtiles/root.json';
+/** Separation from the ground slab, in cube units, to avoid z-fighting. */
+const STREET_LIFT = 0.004;
 
 /**
  * Ask Google directly whether this key may fetch 3D tiles, and relay whatever
@@ -481,8 +483,10 @@ export class Photoreal {
     // The lowest hits are the street; ignore the very lowest in case a ray
     // slipped through a gap in the mesh.
     const street = hits[Math.min(1, hits.length - 1)];
-    // A hair above the ground slab, so the two surfaces never z-fight.
-    const delta = GROUND_TOP + 0.004 - street;
+    // A hair above the ground slab, so the two surfaces never z-fight. Small
+    // as it is, this is 30 cm of real world at cube scale, so anything
+    // measuring against the tiles must use streetY rather than GROUND_TOP.
+    const delta = GROUND_TOP + STREET_LIFT - street;
     if (Math.abs(delta) > 0.002) {
       this.inner.position.y += delta;
       this.groundOffset += delta;
@@ -510,6 +514,14 @@ export class Photoreal {
     this.uniforms.uNight.value = climate.night;
     this.uniforms.uWet.value = climate.wetness;
     this.uniforms.uSnowCover.value = climate.snowCover;
+  }
+
+  /**
+   * Where the tiles put street level. Not quite GROUND_TOP: the mesh is lifted
+   * clear of the ground slab, and at 75 m to the unit that gap is 30 cm.
+   */
+  get streetY() {
+    return GROUND_TOP + STREET_LIFT;
   }
 
   /** Copyright strings Google requires on screen while its tiles are shown. */

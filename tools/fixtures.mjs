@@ -146,5 +146,28 @@ for (let i = -4; i <= 4; i++) {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* Footprints matching the 3D Tiles fixture, for the measurement test.  */
+/* tools/make-tiles-fixture.py builds boxes of known height at known    */
+/* offsets; these are the same rectangles as OSM ways, so measured      */
+/* heights can be asserted against truth.                               */
+/* ------------------------------------------------------------------ */
+
+export const KNOWN_BUILDINGS = [
+  { name: 'fixture-tower-east', east: 70, north: 0, w: 14, d: 14, height: 48 },
+  { name: 'fixture-slab-north', east: 0, north: 70, w: 30, d: 12, height: 18 },
+  { name: 'fixture-block-centre', east: 0, north: 0, w: 16, d: 16, height: 22 },
+];
+
+for (const b of KNOWN_BUILDINGS) {
+  elements.push({
+    type: 'way',
+    id: id++,
+    tags: { building: 'yes', name: b.name },
+    // rect() takes (centre east, centre south) — north is negative south.
+    geometry: rect(b.east, -b.north, b.w, b.d),
+  });
+}
+
 export const OVERPASS = { elements };
 export const CENTRE = { lat: LAT, lon: LON };
