@@ -137,7 +137,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.minDistance = 0.35;
-controls.maxDistance = 12;
+controls.maxDistance = 30;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.28;
 controls.target.set(0, -0.02, 0);
@@ -212,12 +212,45 @@ const bounce = new THREE.DirectionalLight(0xffffff, 0.18);
 bounce.position.set(-2, -1.5, -2);
 scene.add(bounce);
 
+// The cube is 2 units on a side, so its bounding sphere is half the diagonal.
+const CUBE_RADIUS = Math.sqrt(3);
+
+/**
+ * Pull the camera back far enough that the whole cube fits the viewport. A
+ * portrait phone is narrow enough that the horizontal field of view, not the
+ * vertical one, is the binding constraint — without this the cube runs off
+ * both sides of the screen.
+ */
+function fitCamera() {
+  const portrait = camera.aspect < 0.9;
+  const margin = portrait ? 1.02 : 1.12;
+  const vHalf = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+  const distance = (CUBE_RADIUS * margin) / Math.sin(Math.min(vHalf, hHalf));
+
+  // On a phone the readout and headline sit over the lower third, so the cube
+  // is nudged up out of them.
+  controls.target.set(0, portrait ? -0.42 : -0.02, 0);
+
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(3.1, 5.3, 3.55);
+  camera.position.copy(controls.target).addScaledVector(dir.normalize(), distance);
+  controls.update();
+}
+
+// Once the viewer has moved the camera themselves, leave it alone.
+let userMovedCamera = false;
+controls.addEventListener('start', () => {
+  userMovedCamera = true;
+});
+
 function resize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (!userMovedCamera) fitCamera();
   photoreal.onResize(camera, renderer);
 }
 window.addEventListener('resize', resize);
@@ -520,14 +553,19 @@ async function buildForPlace(place, { preferMode } = {}) {
   // through if Street View has no coverage.
   try {
     showLoader('Cutting the ground', 0.45);
-    const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M);
+    setStatus('Fetching building footprints from OpenStreetMap…');
+    const osm = await fetchOSM(place.lat, place.lon, MODEL_RADIUS_M, (host) => {
+      showLoader(`Cutting the ground · ${host}`, 0.45);
+    });
     const stats = city.build(osm, place.lat, place.lon, MODEL_RADIUS_M, HEIGHT_EXAGGERATION);
     setStatus(
-      `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`,
-      'ok'
+      stats.buildings
+        ? `${stats.buildings} building footprints within ${MODEL_RADIUS_M} m, heights ×${HEIGHT_EXAGGERATION}`
+        : `OpenStreetMap has no building footprints mapped within ${MODEL_RADIUS_M} m of here.`,
+      stats.buildings ? 'ok' : 'error'
     );
   } catch (err) {
-    setStatus(`OpenStreetMap geometry unavailable: ${err.message}`, 'error');
+    setStatus(`No footprints: ${err.message}. Press Build cube to retry.`, 'error');
   }
 
   const wantPhotoreal = (preferMode || state.mode) === 'photoreal';
