@@ -294,6 +294,32 @@ const tilesInfo = await page.evaluate(() => ({
 console.log('photoreal:', tilesInfo);
 process.stdout.write('rendered tiles-day, tiles-night-rain\n');
 
+/* ---- Phone: the whole cube has to fit a portrait viewport ---- */
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(600);
+await page.screenshot({ path: path.join(outDir, '13-phone.png') });
+const phoneFit = await page.evaluate(() => {
+  const { camera, controls } = window.__cube;
+  camera.updateMatrixWorld();
+  const THREE_fov = (camera.fov * Math.PI) / 180;
+  // Project the eight cube corners and check they all land on screen.
+  const corners = [];
+  for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) corners.push([x, y, z]);
+  let maxX = 0, maxY = 0;
+  for (const [x, y, z] of corners) {
+    const v = { x, y, z };
+    const p = new (Object.getPrototypeOf(camera.position).constructor)(v.x, v.y, v.z);
+    p.project(camera);
+    maxX = Math.max(maxX, Math.abs(p.x));
+    maxY = Math.max(maxY, Math.abs(p.y));
+  }
+  return { maxX: +maxX.toFixed(3), maxY: +maxY.toFixed(3), dist: +camera.position.distanceTo(controls.target).toFixed(2) };
+});
+console.log('phone fit (must be <= 1.0):', phoneFit);
+if (phoneFit.maxX > 1 || phoneFit.maxY > 1) problems.push(`[phone] cube overflows viewport: ${JSON.stringify(phoneFit)}`);
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.waitForTimeout(400);
+
 /* ---- README preview: the model cube at night in the rain, no chrome ---- */
 await page.evaluate(() => {
   document.getElementById('btn-close').click();

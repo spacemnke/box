@@ -548,4 +548,6 @@ input::placeholder { color: rgba(242, 244, 247, 0.22); }
   .strip { display: none; }
   .drawer { width: 100%; border-left: 0; }
   .credits { font-size: 9px; bottom: 12px; }
+  /* Out of the way of the dial, which moves to the bottom on narrow screens. */
+  .loader { top: 68px; bottom: auto; width: 190px; }
 }

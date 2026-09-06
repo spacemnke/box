@@ -3,10 +3,14 @@
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast';
+// Volunteer-run and frequently queued, so several are tried in turn.
 const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.osm.jp/api/interpreter',
 ];
+const OVERPASS_TIMEOUT_MS = 18000;
 const GOOGLE_SV = 'https://maps.googleapis.com/maps/api/streetview';
 
 async function getJSON(url, options = {}) {
@@ -311,8 +315,9 @@ export function loadImage(url) {
 /**
  * Buildings, roads, water and greenery in a square around a point.
  * @param {number} radius half-width of the square, in metres
+ * @param {(host: string) => void} [onProgress] called with each mirror tried
  */
-export async function fetchOSM(lat, lon, radius) {
+export async function fetchOSM(lat, lon, radius, onProgress) {
   const dLat = radius / 111320;
   const dLon = radius / (111320 * Math.cos((lat * Math.PI) / 180));
   const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon]
@@ -336,18 +341,27 @@ export async function fetchOSM(lat, lon, radius) {
 
   let lastError;
   for (const endpoint of OVERPASS_ENDPOINTS) {
+    // A queued mirror can hang for minutes; give up and try the next one.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), OVERPASS_TIMEOUT_MS);
     try {
+      onProgress?.(new URL(endpoint).host);
       const res = await fetch(endpoint, {
         method: 'POST',
         body: new URLSearchParams({ data: query }),
+        signal: abort.signal,
       });
-      if (!res.ok) throw new Error(`${res.status} from ${endpoint}`);
+      if (!res.ok) throw new Error(`${res.status} from ${new URL(endpoint).host}`);
       return parseOSM(await res.json());
     } catch (err) {
-      lastError = err;
+      lastError = err.name === 'AbortError'
+        ? new Error(`${new URL(endpoint).host} timed out`)
+        : err;
+    } finally {
+      clearTimeout(timer);
     }
   }
-  throw lastError || new Error('Overpass unreachable');
+  throw new Error(`every OpenStreetMap mirror failed (${lastError?.message || 'unknown'})`);
 }
 
 function parseOSM(json) {
